@@ -97,7 +97,7 @@ again:
 These files are shared with other tools. MyTerm marks its own commands with a trailing
 `# myterm-managed-hook` comment, adds nothing else, and removes only what carries that mark.
 
-Each hook writes an escape sequence to its own terminal, `ESC ]7337;agent=claude;event=finished ESC \`,
+Each hook writes an escape sequence to its own terminal, `ESC ]7337;agent=claude;event=finished;session=<id> ESC \`,
 and does nothing unless `MYTERM_PANE_ID` is set. Only MyTerm's terminals set it, so the hooks stay
 silent in every other terminal, and terminals that do not know the code ignore it. Restart the agent
 session after installing the hooks.
@@ -116,6 +116,26 @@ said it when the window is on screen.
 The banner is named after the workspace, the tab, or both, whichever you pick, and it carries a
 swatch of the workspace's folder colour, so a glance is enough to tell which project wants you.
 A workspace outside a folder uses its own colour. Clicking the banner opens that tab.
+
+### Come back to a live agent
+
+A pane that was in a Claude Code conversation rejoins that same conversation when MyTerm starts
+again. The pane restores its working directory and its recent output as before, then runs
+`claude --resume <id>`, so quitting is no longer the end of the work in progress.
+
+The conversation identifier comes from the hooks above, so agent recovery needs them installed.
+Nothing else about the agent is read: MyTerm keeps the identifier the agent reports, and only if it
+is short and free of shell characters.
+
+Codex panes are not resumed. Its hooks report a new identifier for every turn rather than the one
+`codex resume` accepts, so a restored pane would open on an error instead of the conversation. Codex
+hooks still drive the tab indicator above.
+
+A pane left at its shell prompt when you quit comes back to a shell prompt. Leaving the agent is how
+you tell MyTerm the work is finished.
+
+Turn the whole behavior off with **Restore agent sessions** in General Settings. Like the other
+terminal settings, it can be overridden for one folder or one workspace.
 
 ### Send web links to Safari instead
 

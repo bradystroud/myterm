@@ -214,6 +214,23 @@ struct SettingsView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+
+            Section("Agent sessions") {
+                ScopedSettingRow(
+                    model: model,
+                    scope: scope,
+                    title: "Restore agent sessions",
+                    global: \TerminalPreferences.restoresAgentSessions,
+                    override: \TerminalPreferencesOverrides.restoresAgentSessions
+                ) { value in
+                    Toggle("Restore agent sessions", isOn: value)
+                        .labelsHidden()
+                }
+
+                Text("A pane that was in a Claude Code conversation rejoins it on the next launch, using Claude Code's own resume command. A pane left at its shell prompt comes back to a shell prompt. This needs the hooks above, because the conversation is what they report. Codex panes are not restored: it reports a new identifier every turn rather than the one its resume command takes.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
     }
@@ -999,6 +1016,44 @@ private extension TerminalLineEditingMode {
         switch self {
         case .emacs: return "Emacs"
         case .vi: return "Vi"
+        }
+    }
+}
+
+/// One agent's hook install state, with the button that changes it.
+private struct AgentHooksRow: View {
+    @Bindable var controller: AgentHooksController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                Button(controller.isInstalled
+                    ? "Remove from \(controller.target.displayName)"
+                    : "Set Up \(controller.target.displayName) Hooks") {
+                    if controller.isInstalled {
+                        controller.remove()
+                    } else {
+                        controller.install()
+                    }
+                }
+
+                if controller.isInstalled {
+                    Label("Installed in \(controller.target.fileDescription)", systemImage: "checkmark.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(controller.target.fileDescription)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if case .failed(let message) = controller.state {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .accessibilityLabel("\(controller.target.displayName) hooks error: \(message)")
+            }
         }
     }
 }
