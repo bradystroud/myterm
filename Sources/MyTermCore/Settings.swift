@@ -142,6 +142,7 @@ public struct TerminalPreferences: Codable, Equatable, Hashable, Sendable {
     public var terminalTheme: TerminalTheme
     public var shell: TerminalShell
     public var newSessionWorkingDirectory: NewSessionWorkingDirectoryPolicy
+    public var restoresAgentSessions: Bool
     public var scrollbackLines: Int
     public var cursorShape: TerminalCursorShape
     public var cursorBlink: Bool
@@ -161,6 +162,7 @@ public struct TerminalPreferences: Codable, Equatable, Hashable, Sendable {
         terminalTheme: TerminalTheme = .system,
         shell: TerminalShell = .loginShell,
         newSessionWorkingDirectory: NewSessionWorkingDirectoryPolicy = .home,
+        restoresAgentSessions: Bool = true,
         scrollbackLines: Int = TerminalPreferences.defaultScrollbackLines,
         cursorShape: TerminalCursorShape = .block,
         cursorBlink: Bool = true,
@@ -179,6 +181,7 @@ public struct TerminalPreferences: Codable, Equatable, Hashable, Sendable {
         self.terminalTheme = terminalTheme
         self.shell = shell
         self.newSessionWorkingDirectory = newSessionWorkingDirectory
+        self.restoresAgentSessions = restoresAgentSessions
         self.scrollbackLines = Self.clampedScrollbackLines(scrollbackLines)
         self.cursorShape = cursorShape
         self.cursorBlink = cursorBlink
@@ -202,6 +205,7 @@ public struct TerminalPreferences: Codable, Equatable, Hashable, Sendable {
             terminalTheme: terminalTheme,
             shell: shell,
             newSessionWorkingDirectory: newSessionWorkingDirectory,
+            restoresAgentSessions: restoresAgentSessions,
             scrollbackLines: scrollbackLines,
             cursorShape: cursorShape,
             cursorBlink: cursorBlink,
@@ -225,6 +229,7 @@ public struct TerminalPreferences: Codable, Equatable, Hashable, Sendable {
         try container.encode(terminalTheme, forKey: .terminalTheme)
         try container.encode(shell, forKey: .shell)
         try container.encode(newSessionWorkingDirectory, forKey: .newSessionWorkingDirectory)
+        try container.encode(restoresAgentSessions, forKey: .restoresAgentSessions)
         try container.encode(scrollbackLines, forKey: .scrollbackLines)
         try container.encode(cursorShape, forKey: .cursorShape)
         try container.encode(cursorBlink, forKey: .cursorBlink)
@@ -245,6 +250,7 @@ public struct TerminalPreferences: Codable, Equatable, Hashable, Sendable {
         case terminalTheme
         case shell
         case newSessionWorkingDirectory
+        case restoresAgentSessions
         case scrollbackLines
         case cursorShape
         case cursorBlink
@@ -274,6 +280,7 @@ public struct TerminalPreferences: Codable, Equatable, Hashable, Sendable {
             terminalTheme: (try? container.decode(TerminalTheme.self, forKey: .terminalTheme)) ?? .system,
             shell: (try? container.decode(TerminalShell.self, forKey: .shell)) ?? .loginShell,
             newSessionWorkingDirectory: (try? container.decode(NewSessionWorkingDirectoryPolicy.self, forKey: .newSessionWorkingDirectory)) ?? .home,
+            restoresAgentSessions: (try? container.decode(Bool.self, forKey: .restoresAgentSessions)) ?? true,
             scrollbackLines: (try? container.decode(Int.self, forKey: .scrollbackLines)) ?? Self.defaultScrollbackLines,
             cursorShape: (try? container.decode(TerminalCursorShape.self, forKey: .cursorShape)) ?? .block,
             cursorBlink: (try? container.decode(Bool.self, forKey: .cursorBlink)) ?? true,
@@ -342,6 +349,7 @@ public struct TerminalPreferencesOverrides: Codable, Equatable, Hashable, Sendab
     public var terminalTheme: TerminalTheme?
     public var shell: TerminalShell?
     public var newSessionWorkingDirectory: NewSessionWorkingDirectoryPolicy?
+    public var restoresAgentSessions: Bool?
     public var scrollbackLines: Int?
     public var cursorShape: TerminalCursorShape?
     public var cursorBlink: Bool?
@@ -363,6 +371,7 @@ public struct TerminalPreferencesOverrides: Codable, Equatable, Hashable, Sendab
         case terminalTheme
         case shell
         case newSessionWorkingDirectory
+        case restoresAgentSessions
         case scrollbackLines
         case cursorShape
         case cursorBlink
@@ -391,6 +400,7 @@ public struct TerminalPreferencesOverrides: Codable, Equatable, Hashable, Sendab
         terminalTheme = try? container.decodeIfPresent(TerminalTheme.self, forKey: .terminalTheme)
         shell = try? container.decodeIfPresent(TerminalShell.self, forKey: .shell)
         newSessionWorkingDirectory = try? container.decodeIfPresent(NewSessionWorkingDirectoryPolicy.self, forKey: .newSessionWorkingDirectory)
+        restoresAgentSessions = try? container.decodeIfPresent(Bool.self, forKey: .restoresAgentSessions)
         scrollbackLines = try? container.decodeIfPresent(Int.self, forKey: .scrollbackLines)
         cursorShape = try? container.decodeIfPresent(TerminalCursorShape.self, forKey: .cursorShape)
         cursorBlink = try? container.decodeIfPresent(Bool.self, forKey: .cursorBlink)
@@ -413,6 +423,7 @@ public struct TerminalPreferencesOverrides: Codable, Equatable, Hashable, Sendab
         try container.encodeIfPresent(terminalTheme, forKey: .terminalTheme)
         try container.encodeIfPresent(shell, forKey: .shell)
         try container.encodeIfPresent(newSessionWorkingDirectory, forKey: .newSessionWorkingDirectory)
+        try container.encodeIfPresent(restoresAgentSessions, forKey: .restoresAgentSessions)
         try container.encodeIfPresent(scrollbackLines, forKey: .scrollbackLines)
         try container.encodeIfPresent(cursorShape, forKey: .cursorShape)
         try container.encodeIfPresent(cursorBlink, forKey: .cursorBlink)
@@ -434,6 +445,7 @@ public struct TerminalPreferencesOverrides: Codable, Equatable, Hashable, Sendab
             terminalTheme: terminalTheme ?? base.terminalTheme,
             shell: shell ?? base.shell,
             newSessionWorkingDirectory: newSessionWorkingDirectory ?? base.newSessionWorkingDirectory,
+            restoresAgentSessions: restoresAgentSessions ?? base.restoresAgentSessions,
             scrollbackLines: scrollbackLines ?? base.scrollbackLines,
             cursorShape: cursorShape ?? base.cursorShape,
             cursorBlink: cursorBlink ?? base.cursorBlink,

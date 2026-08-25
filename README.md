@@ -58,16 +58,37 @@ A tab shows a small dot when Claude Code finishes a turn, or asks a question, in
 looking at. The workspace row in the sidebar shows the same dot while any of its tabs carries one.
 Reaching the tab clears it. A tab you are already looking at is never marked.
 
-The indicator is off until you press **Set Up Claude Code Hooks** in General Settings. That writes
-three hooks to `~/.claude/settings.json`, for `UserPromptSubmit`, `Stop`, and `Notification`, and the
-same button removes them again. Nothing else in that file is changed.
+The indicator is off until you press **Set Up Claude Code Hooks**, or **Set Up Codex Hooks**, in
+General Settings. That writes MyTerm's own hooks to `~/.claude/settings.json` or `~/.codex/hooks.json`,
+and the same button removes them again. Nothing else in those files is changed. Codex asks you to
+trust a new hook the first time it runs.
 
-Each hook writes an escape sequence to its own terminal, `ESC ]7337;agent=claude;event=finished ESC \`,
-and does nothing unless `MYTERM_PANE_ID` is set. Only MyTerm's terminals set it, so the hooks stay
-silent in every other terminal, and terminals that do not know the code ignore it. Restart a Claude
-Code session after installing the hooks.
+Each hook writes an escape sequence to its own terminal,
+`ESC ]7337;agent=claude;event=finished;session=<id> ESC \`, and does nothing unless `MYTERM_PANE_ID`
+is set. Only MyTerm's terminals set it, so the hooks stay silent in every other terminal, and
+terminals that do not know the code ignore it. Start the agent again after installing the hooks.
 
-The state is not saved. After a relaunch, no tab carries a dot.
+The dot itself is not saved. After a relaunch, no tab carries a dot.
+
+### Come back to a live agent
+
+A pane that was in a Claude Code conversation rejoins that same conversation when MyTerm starts
+again. The pane restores its working directory and its recent output as before, then runs
+`claude --resume <id>`, so quitting is no longer the end of the work in progress.
+
+The conversation identifier comes from the hooks above, so agent recovery needs them installed.
+Nothing else about the agent is read: MyTerm keeps the identifier the agent reports, and only if it
+is short and free of shell characters.
+
+Codex panes are not resumed. Its hooks report a new identifier for every turn rather than the one
+`codex resume` accepts, so a restored pane would open on an error instead of the conversation. Codex
+hooks still drive the tab indicator above.
+
+A pane left at its shell prompt when you quit comes back to a shell prompt. Leaving the agent is how
+you tell MyTerm the work is finished.
+
+Turn the whole behavior off with **Restore agent sessions** in General Settings. Like the other
+terminal settings, it can be overridden for one folder or one workspace.
 
 ## Browser sessions and passkeys
 

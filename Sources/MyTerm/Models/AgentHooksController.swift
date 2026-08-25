@@ -2,10 +2,65 @@ import Foundation
 import MyTermCore
 import Observation
 
-/// Installs the Claude Code hooks that report agent activity to MyTerm.
+/// One agent MyTerm can install hooks for, and where that agent keeps them.
+struct AgentHookTarget: Equatable, Sendable {
+    /// Lowercased agent name. It travels in the report, and it decides the resume command.
+    let agent: String
+    let displayName: String
+    /// The path to show in Settings, written the way a person would type it.
+    let fileDescription: String
+    let settingsURL: URL
+    let events: [AgentHookEvent]
+
+    static let claude = AgentHookTarget(
+        agent: "claude",
+        displayName: "Claude Code",
+        fileDescription: "~/.claude/settings.json",
+        settingsURL: FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: ".claude/settings.json", directoryHint: .notDirectory),
+        events: [
+            AgentHookEvent(name: "SessionStart", activity: .ready),
+            AgentHookEvent(name: "UserPromptSubmit", activity: .working),
+            AgentHookEvent(name: "Stop", activity: .finished),
+            AgentHookEvent(name: "Notification", activity: .awaitingInput),
+            AgentHookEvent(name: "SessionEnd", activity: .exited),
+        ]
+    )
+
+    static let codex = AgentHookTarget(
+        agent: "codex",
+        displayName: "Codex",
+        fileDescription: "~/.codex/hooks.json",
+        settingsURL: FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: ".codex/hooks.json", directoryHint: .notDirectory),
+        events: [
+            AgentHookEvent(name: "SessionStart", activity: .ready),
+            AgentHookEvent(name: "UserPromptSubmit", activity: .working),
+            AgentHookEvent(name: "Stop", activity: .finished),
+            AgentHookEvent(name: "PermissionRequest", activity: .awaitingInput),
+        ]
+    )
+
+    func withSettingsURL(_ url: URL) -> AgentHookTarget {
+        AgentHookTarget(
+            agent: agent,
+            displayName: displayName,
+            fileDescription: fileDescription,
+            settingsURL: url,
+            events: events
+        )
+    }
+}
+
+struct AgentHookEvent: Equatable, Sendable {
+    let name: String
+    let activity: AgentActivity
+}
+
+/// Installs the agent hooks that report agent activity, and agent session identity, to MyTerm.
 ///
 /// The hooks write `AgentActivityMarker`'s escape sequence to the pane's TTY. They are guarded by
-/// `MYTERM_PANE_ID`, which only MyTerm's terminals carry, so the same Claude configuration stays
+/// `MYTERM_PANE_ID`, which only MyTerm's terminals carry, so the same agent configuration stays
 /// silent in every other terminal.
 @MainActor
 @Observable
@@ -19,19 +74,16 @@ final class AgentHooksController {
     /// Marks the commands this app owns, so removal never touches a hook somebody else wrote.
     static let marker = "# myterm-managed-hook"
 
-    /// Each Claude Code event MyTerm listens to, and the activity it reports.
-    static let hookedEvents: [(event: String, activity: AgentActivity)] = [
-        ("UserPromptSubmit", .working),
-        ("Stop", .finished),
-        ("Notification", .awaitingInput),
-    ]
-
-    private let settingsURL: URL
+    let target: AgentHookTarget
     private(set) var state: State = .notInstalled
 
-    init(settingsURL: URL = FileManager.default.homeDirectoryForCurrentUser
-        .appending(path: ".claude/settings.json", directoryHint: .notDirectory)) {
-        self.settingsURL = settingsURL
+    init(target: AgentHookTarget = .claude) {
+        self.target = target
+        refresh()
+    }
+
+    init(settingsURL: URL) {
+        target = AgentHookTarget.claude.withSettingsURL(settingsURL)
         refresh()
     }
 
@@ -40,7 +92,7 @@ final class AgentHooksController {
     func refresh() {
         do {
             let settings = try readSettings()
-            state = Self.installedEvents(in: settings).count == Self.hookedEvents.count ? .installed : .notInstalled
+            state = installedEvents(in: settings).count == target.events.count ? .installed : .notInstalled
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -50,16 +102,16 @@ final class AgentHooksController {
         do {
             var settings = try readSettings()
             var hooks = settings["hooks"] as? [String: Any] ?? [:]
-            for (event, activity) in Self.hookedEvents {
-                var entries = Self.entriesWithoutMyTerm(hooks[event])
+            for event in target.events {
+                var entries = Self.entriesWithoutMyTerm(hooks[event.name])
                 entries.append([
                     "hooks": [[
                         "type": "command",
-                        "command": Self.command(for: activity),
+                        "command": Self.command(agent: target.agent, activity: event.activity),
                         "timeout": 5,
                     ]],
                 ])
-                hooks[event] = entries
+                hooks[event.name] = entries
             }
             settings["hooks"] = hooks
             try writeSettings(settings)
@@ -76,13 +128,13 @@ final class AgentHooksController {
                 state = .notInstalled
                 return
             }
-            for (event, _) in Self.hookedEvents {
-                let entries = Self.entriesWithoutMyTerm(hooks[event])
+            for event in target.events {
+                let entries = Self.entriesWithoutMyTerm(hooks[event.name])
                 // Dropping the key entirely keeps the file as it was before MyTerm touched it.
                 if entries.isEmpty {
-                    hooks.removeValue(forKey: event)
+                    hooks.removeValue(forKey: event.name)
                 } else {
-                    hooks[event] = entries
+                    hooks[event.name] = entries
                 }
             }
             if hooks.isEmpty {
@@ -97,25 +149,32 @@ final class AgentHooksController {
         }
     }
 
-    /// The shell one hook runs. It reports to the pane's TTY and never writes to stdout, which
-    /// Claude Code reads as the hook's own JSON reply.
-    static func command(for activity: AgentActivity) -> String {
-        let payload = "agent=claude;event=\(activity.rawValue)"
+    /// The shell one hook runs. It reports to the pane's TTY and never writes to stdout, which the
+    /// agent reads as the hook's own JSON reply.
+    ///
+    /// The hook payload arrives on stdin. Reading `session_id` out of it is what lets MyTerm bring
+    /// the same conversation back after a restart, and the character class is what keeps a hostile
+    /// payload from reaching the command line that resumes it.
+    static func command(agent: String, activity: AgentActivity) -> String {
+        let idPattern = "s/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([A-Za-z0-9._-]\\{1,64\\}\\)\".*/\\1/p"
+        let payload = "agent=\(agent);event=\(activity.rawValue);session=%s"
         return """
-        [ -n "${MYTERM_PANE_ID:-}" ] && { __tty=$(ps -o tty= -p "$PPID" 2>/dev/null | tr -d '[:space:]'); \
+        [ -n "${MYTERM_PANE_ID:-}" ] && { __id=$(cat 2>/dev/null | tr -d '\\n' | sed -n '\(idPattern)'); \
+        __tty=$(ps -o tty= -p "$PPID" 2>/dev/null | tr -d '[:space:]'); \
         case "$__tty" in *[0-9]*) __tty="/dev/${__tty#/dev/}";; *) __tty="/dev/tty";; esac; \
-        printf '\\033]\(AgentActivityMarker.oscCode);\(payload)\\033\\\\' > "$__tty"; } >/dev/null 2>&1 || true \(marker)
+        printf '\\033]\(AgentActivityMarker.oscCode);\(payload)\\033\\\\' "$__id" > "$__tty"; \
+        } >/dev/null 2>&1 || true \(marker)
         """
     }
 
-    static func installedEvents(in settings: [String: Any]) -> [String] {
+    func installedEvents(in settings: [String: Any]) -> [String] {
         guard let hooks = settings["hooks"] as? [String: Any] else { return [] }
-        return hookedEvents.compactMap { event, _ in
-            let entries = (hooks[event] as? [[String: Any]]) ?? []
+        return target.events.compactMap { event in
+            let entries = (hooks[event.name] as? [[String: Any]]) ?? []
             let hasMyTermCommand = entries.contains { entry in
-                commands(in: entry).contains { $0.hasSuffix(marker) }
+                Self.commands(in: entry).contains { $0.hasSuffix(Self.marker) }
             }
-            return hasMyTermCommand ? event : nil
+            return hasMyTermCommand ? event.name : nil
         }
     }
 
@@ -138,25 +197,25 @@ final class AgentHooksController {
     }
 
     private func readSettings() throws -> [String: Any] {
-        guard FileManager.default.fileExists(atPath: settingsURL.path) else { return [:] }
-        let data = try Data(contentsOf: settingsURL)
+        guard FileManager.default.fileExists(atPath: target.settingsURL.path) else { return [:] }
+        let data = try Data(contentsOf: target.settingsURL)
         guard !data.isEmpty else { return [:] }
         guard let settings = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw AgentHooksFailure(message: "\(settingsURL.lastPathComponent) is not a JSON object.")
+            throw AgentHooksFailure(message: "\(target.settingsURL.lastPathComponent) is not a JSON object.")
         }
         return settings
     }
 
     private func writeSettings(_ settings: [String: Any]) throws {
         try FileManager.default.createDirectory(
-            at: settingsURL.deletingLastPathComponent(),
+            at: target.settingsURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
         let data = try JSONSerialization.data(
             withJSONObject: settings,
             options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         )
-        try data.write(to: settingsURL, options: .atomic)
+        try data.write(to: target.settingsURL, options: .atomic)
     }
 }
 

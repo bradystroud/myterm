@@ -25,7 +25,7 @@ extension AppModel {
         tabID: TabID
     ) {
         switch activity {
-        case .working:
+        case .ready, .working, .exited:
             agentAttention.removeValue(forKey: tabID)
         case .finished, .awaitingInput:
             guard !isTabVisible(workspaceID: workspaceID, tabGroupID: tabGroupID, tabID: tabID) else {
@@ -76,6 +76,10 @@ extension AgentActivity {
             "Agent finished"
         case .awaitingInput:
             "Agent is waiting for you"
+        case .exited:
+            "Agent stopped"
+        case .ready:
+            "Agent is ready"
         }
     }
 }
