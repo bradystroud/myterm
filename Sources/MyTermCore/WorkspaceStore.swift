@@ -395,7 +395,7 @@ public final class WorkspaceStore {
     @discardableResult
     public func importWorkspaces(
         fromJSON data: Data,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = UserHomeDirectory.current
     ) throws -> WorkspaceImportSummary {
         // LossyArray only counts what it drops when the tracker is in userInfo. Without it, a
         // malformed entry disappears silently and the summary would claim a clean import.
@@ -446,7 +446,7 @@ public final class WorkspaceStore {
     @discardableResult
     public func importWorkspaces(
         _ document: WorkspaceImportDocument,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        homeDirectory: URL = UserHomeDirectory.current,
         droppedElementCount: Int = 0
     ) throws -> WorkspaceImportSummary {
         guard !document.workspaces.isEmpty else {

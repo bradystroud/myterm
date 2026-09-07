@@ -66,6 +66,18 @@ Reaching the shim takes more than `PATH`. Your own shell startup files run after
 
 A tool that explicitly invokes `/usr/bin/open` bypasses MyTerm and can still open externally. Non-web `open` requests retain their normal system handling. Terminal links to configured text files use the scoped **Open text files with** command in Browser Settings, which defaults to `ide browse {file}`. Use suffix patterns such as `*.json` for Markdown, JSON, source, and config files; literal names such as `README`, `Dockerfile`, and `.gitignore` match exactly. Unsupported files and failed or empty text-file commands open in their macOS application instead of MyTerm's browser.
 
+### Reach your terminals from an iPad or iPhone
+
+MyTerm Remote is a companion app in `apps/MyTermRemote`. Link a device once by scanning the code
+under **Settings → Devices → Link a Device…**, and it lists the same workspaces, shows the same cook
+beside tabs that need you, and opens any terminal tab as the live session on the Mac. Nothing runs
+on the device: it is a window onto this Mac. The connection is TLS with a key derived from the
+pairing token, and it reconnects on its own when the Mac or the device comes back. On the local
+network the device finds the Mac by name or address. From anywhere else it goes through a relay
+you host yourself, a small Cloudflare Worker in `relay/` that forwards encrypted bytes and can read
+none of them. See [docs/REMOTE_COMPANION.md](docs/REMOTE_COMPANION.md) for the design and how to
+try it.
+
 ### Know when an agent needs you
 
 A tab whose agent is running shows a cook where its icon usually goes. He tells you what the agent

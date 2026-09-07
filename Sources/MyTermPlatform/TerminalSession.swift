@@ -26,6 +26,10 @@ public protocol TerminalProcessSession: AnyObject {
     func contentSnapshot(maximumCharacters: Int) -> String
     func setContentChangeHandler(_ handler: (@MainActor () -> Void)?)
     func setPaneActive(_ isActive: Bool)
+    func setOutputTap(_ tap: (@MainActor (ArraySlice<UInt8>) -> Void)?)
+    func sendInput(_ bytes: ArraySlice<UInt8>)
+    /// The screen as it stands, for a viewer that joined after the output that drew it.
+    func gridSnapshot() -> TerminalGridSnapshot?
 }
 
 public extension TerminalProcessSession {
@@ -38,6 +42,12 @@ public extension TerminalProcessSession {
     func setContentChangeHandler(_ handler: (@MainActor () -> Void)?) {}
 
     func setPaneActive(_ isActive: Bool) {}
+
+    func setOutputTap(_ tap: (@MainActor (ArraySlice<UInt8>) -> Void)?) {}
+
+    func sendInput(_ bytes: ArraySlice<UInt8>) {}
+
+    func gridSnapshot() -> TerminalGridSnapshot? { nil }
 }
 
 public struct TerminalColor: Equatable, Sendable {

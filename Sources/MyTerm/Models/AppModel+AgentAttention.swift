@@ -1,5 +1,6 @@
 import Foundation
 import MyTermCore
+import MyTermRemoteProtocol
 
 /// The cook that sits beside a tab, and the banner that goes with it.
 ///
@@ -45,6 +46,7 @@ extension AppModel {
             tabID: tabID,
             isTabVisible: isInFrontOfUser
         )
+        broadcastAgentActivity(forTab: tabID)
         // A banner is for being away from the app. With MyTerm in front, the cook has already said it.
         guard !isApplicationActive() else { return }
         postAgentNotification(for: report, workspaceID: workspaceID, tabID: tabID)
@@ -69,11 +71,22 @@ extension AppModel {
         agentInbox.markRead(tabID: tabID)
         guard let activity = agentAttention[tabID] else { return }
         agentAttention[tabID] = activity.afterReading
+        broadcastAgentActivity(forTab: tabID)
     }
 
     func forgetAgentAttention(forTab tabID: TabID) {
-        agentAttention.removeValue(forKey: tabID)
         agentInbox.markRead(tabID: tabID)
+        guard agentAttention.removeValue(forKey: tabID) != nil else { return }
+        broadcastAgentActivity(forTab: tabID)
+    }
+
+    /// Pushes one tab's cook state to every connected device, so it updates live without the device
+    /// waiting for the tree's own once-a-second poll, which does not watch this state at all.
+    private func broadcastAgentActivity(forTab tabID: TabID) {
+        remoteHost.broadcast(agentActivity: RemoteAgentActivity(
+            tabID: tabID.description,
+            activity: agentAttention[tabID]
+        ))
     }
 
     /// Brings a tab forward, for a banner the user clicked.

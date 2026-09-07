@@ -2,6 +2,8 @@ import AppKit
 import Foundation
 import MyTermCore
 import MyTermPlatform
+import MyTermRemoteHost
+import MyTermRemoteProtocol
 import Observation
 import OSLog
 import UniformTypeIdentifiers
@@ -112,6 +114,24 @@ final class AppModel {
     var settingsScope = TerminalSettingsScope.global
     private(set) var stateVersion = 0
     let updates: UpdateController
+    let remoteHost: RemoteHostService
+    /// Every device watching a terminal, by session then by attachment. One tap on the session
+    /// fans out to all of them, so a second device attaching never silences the first.
+    @ObservationIgnored var remoteOutputTaps: [TerminalSessionID: [UUID: @MainActor (ArraySlice<UInt8>) -> Void]] = [:]
+    /// Where the pairing token lives between launches. Kept separate from `remoteHost` itself so
+    /// rotating the token has one place to write it back to.
+    @ObservationIgnored private let remoteHostDefaults: UserDefaults
+    private static let remoteHostTokenDefaultsKey = "remote.token"
+    private static let listenerEnabledDefaultsKey = "remote.listenerEnabled"
+    private static let relayURLDefaultsKey = "remote.relayURL"
+    private static let relayEnabledDefaultsKey = "remote.relayEnabled"
+    private static let relayIdentifierDefaultsKey = "remote.relayIdentifier"
+    private static let relayHostKeyDefaultsKey = "remote.relayHostKey"
+    /// The Mac's outbound link to the relay, while reach from anywhere is on and the listener is up.
+    private(set) var relayLink: RelayHostLink?
+    /// What the user typed as the relay's address. Kept even while the relay is off.
+    private(set) var relayURLText: String
+    private(set) var isRelayEnabled: Bool
 
     init(
         channel: MyTermChannel = .active,
@@ -155,6 +175,19 @@ final class AppModel {
         self.isApplicationActive = isApplicationActive
         browserDataProfileResolver = BrowserDataProfileResolver(channel: channel)
         self.updates = updates ?? UpdateController(channel: channel)
+        let remoteHostSuiteName = ProcessInfo.processInfo.environment["MYTERM_USER_DEFAULTS_SUITE"] ?? channel.bundleIdentifier
+        remoteHostDefaults = UserDefaults(suiteName: remoteHostSuiteName) ?? .standard
+        let remoteHostToken = remoteHostDefaults.string(forKey: Self.remoteHostTokenDefaultsKey).flatMap { $0.isEmpty ? nil : $0 }
+            ?? RemoteTransportSecurity.makeToken()
+        remoteHostDefaults.set(remoteHostToken, forKey: Self.remoteHostTokenDefaultsKey)
+        // Off until the user turns it on in Settings → Devices. A listener that starts by default is
+        // a remote shell that exists by default.
+        remoteHost = RemoteHostService(
+            hostName: Host.current().localizedName ?? "Mac",
+            token: remoteHostToken
+        )
+        relayURLText = remoteHostDefaults.string(forKey: Self.relayURLDefaultsKey) ?? ""
+        isRelayEnabled = remoteHostDefaults.bool(forKey: Self.relayEnabledDefaultsKey)
         if browserLauncherURL == nil {
             // Without the launcher every pane starts with an empty MyTerm environment, so BROWSER,
             // the open shim and the zsh chain are all absent and web links leave for the system
@@ -187,6 +220,111 @@ final class AppModel {
         if let sessionID = selectedTab?.terminalSession?.id {
             terminalSessions[sessionID]?.focus()
         }
+        // Handing over the data source does not open a port. The listener still waits for the user.
+        remoteHost.connect(dataSource: self)
+        remoteHost.onStateChanged = { [weak self] _ in
+            self?.updateRelayLink()
+        }
+        // The switch is the user's standing answer, not a per-launch one. A Mac that forgot it
+        // after every restart would be unreachable exactly when the user is away from it.
+        if remoteHostDefaults.bool(forKey: Self.listenerEnabledDefaultsKey) {
+            remoteHost.start()
+        }
+    }
+
+    /// Turns the listener on or off and remembers the choice across launches.
+    func setRemoteHostEnabled(_ isEnabled: Bool) {
+        remoteHostDefaults.set(isEnabled, forKey: Self.listenerEnabledDefaultsKey)
+        if isEnabled {
+            remoteHost.start()
+        } else {
+            remoteHost.stop()
+        }
+    }
+
+    // MARK: - Reach from anywhere
+
+    /// The relay this Mac can be reached through, for the pairing code. Nil while the relay is off.
+    var relayEndpoint: RelayEndpoint? {
+        guard isRelayEnabled, let url = Self.relayURL(from: relayURLText) else { return nil }
+        return RelayEndpoint(url: url, rendezvousID: relayIdentifier)
+    }
+
+    func setRelay(urlText: String, enabled: Bool) {
+        relayURLText = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        isRelayEnabled = enabled && Self.relayURL(from: relayURLText) != nil
+        remoteHostDefaults.set(relayURLText, forKey: Self.relayURLDefaultsKey)
+        remoteHostDefaults.set(isRelayEnabled, forKey: Self.relayEnabledDefaultsKey)
+        updateRelayLink()
+    }
+
+    /// A relay address is an origin. Anything else the user pastes is trimmed to one.
+    static func relayURL(from text: String) -> URL? {
+        guard var components = URLComponents(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = components.scheme?.lowercased(), ["https", "http", "wss", "ws"].contains(scheme),
+              let host = components.host, !host.isEmpty
+        else { return nil }
+        components.scheme = scheme == "ws" ? "http" : scheme == "wss" ? "https" : scheme
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.url
+    }
+
+    /// The rendezvous the relay knows this Mac by. Made once, kept until the token is regenerated,
+    /// because the pairing code carries it and every paired device holds it.
+    private var relayIdentifier: String {
+        if let existing = remoteHostDefaults.string(forKey: Self.relayIdentifierDefaultsKey),
+           RelayRendezvous.isValidIdentifier(existing) {
+            return existing
+        }
+        let made = RelayRendezvous.makeIdentifier()
+        remoteHostDefaults.set(made, forKey: Self.relayIdentifierDefaultsKey)
+        return made
+    }
+
+    /// Known to this Mac and the relay only. It is what stops another Mac from taking this
+    /// Mac's rendezvous.
+    private var relayHostKey: String {
+        if let existing = remoteHostDefaults.string(forKey: Self.relayHostKeyDefaultsKey),
+           RelayRendezvous.isValidIdentifier(existing) {
+            return existing
+        }
+        let made = RelayRendezvous.makeIdentifier()
+        remoteHostDefaults.set(made, forKey: Self.relayHostKeyDefaultsKey)
+        return made
+    }
+
+    /// The link exists only while both the switch and the listener are on. There is nothing to
+    /// relay to a listener that is off.
+    private func updateRelayLink() {
+        guard let endpoint = relayEndpoint, remoteHost.listeningPort != nil else {
+            relayLink?.stop()
+            relayLink = nil
+            return
+        }
+        if relayLink?.endpointDescription == endpoint.url.absoluteString {
+            return
+        }
+        relayLink?.stop()
+        let link = RelayHostLink(endpoint: endpoint, hostKey: relayHostKey) { [weak self] in
+            self?.remoteHost.listeningPort
+        }
+        relayLink = link
+        link.start()
+    }
+
+    /// A device that already holds the old token can no longer connect once this returns.
+    func regenerateRemoteHostToken() {
+        remoteHost.rotateToken()
+        remoteHostDefaults.set(remoteHost.token, forKey: Self.remoteHostTokenDefaultsKey)
+        // A new token is a new pairing. The rendezvous goes with it, so a device holding the old
+        // code cannot even find this Mac at the relay, let alone fail its handshake there.
+        remoteHostDefaults.removeObject(forKey: Self.relayIdentifierDefaultsKey)
+        remoteHostDefaults.removeObject(forKey: Self.relayHostKeyDefaultsKey)
+        relayLink?.stop()
+        relayLink = nil
+        updateRelayLink()
     }
 
     var workspaces: [Workspace] {
@@ -1056,7 +1194,8 @@ final class AppModel {
         }
     }
 
-    private func createTerminalTab(
+    /// The only create-tab path that can target a workspace other than the selected one.
+    func createTerminalTab(
         workingDirectory: URL,
         initialCommand: String?,
         workspaceID: WorkspaceID,
@@ -1946,7 +2085,7 @@ final class AppModel {
         try store.updateBrowserDataProfiles(updates)
     }
 
-    private func restoreRuntimeObjects(in workspace: Workspace) {
+    func restoreRuntimeObjects(in workspace: Workspace) {
         restoreTerminalSessions(in: workspace)
         guard workspace.id == store.selectedWorkspaceID else { return }
         restoreBrowserControllers(in: workspace)
@@ -2290,7 +2429,7 @@ final class AppModel {
         }
     }
 
-    private func cleanUpRuntimeObjects(in workspace: Workspace) {
+    func cleanUpRuntimeObjects(in workspace: Workspace) {
         for tab in workspace.allTabs {
             cleanUpRuntimeObjects(in: tab)
         }
@@ -2301,13 +2440,18 @@ final class AppModel {
             browserControllers.removeValue(forKey: browser.id)?.webView.stopLoading()
         }
         if let sessionID = tab.terminalSession?.id {
+            remoteOutputTaps.removeValue(forKey: sessionID)
             removeTerminalRuntime(sessionID)
         }
         forgetAgentAttention(forTab: tab.id)
         forgetAgentPresence(forTab: tab.id)
     }
 
-    private func closeTab(
+    /// Closes a tab in any workspace and ends its process, asking the user nothing.
+    ///
+    /// `closeTab(_:)` is the one that prompts. This is for callers that already have the user's
+    /// answer, or that must not raise a modal on a Mac nobody is sitting at.
+    func closeTab(
         workspaceID: WorkspaceID,
         tabGroupID: TabGroupID,
         tabID: TabID
@@ -2436,7 +2580,7 @@ final class AppModel {
         }
     }
 
-    private func newSessionWorkingDirectory(
+    func newSessionWorkingDirectory(
         for workspaceID: WorkspaceID,
         activePaneFallback: URL? = nil
     ) throws -> URL {

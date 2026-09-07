@@ -3,7 +3,11 @@
 A companion iPadOS and iOS app that reaches this Mac's MyTerm workspaces, and drives its live
 terminal sessions from an iPad or an iPhone.
 
-Status: specification. No part of this is built.
+Status: first release candidate. The Mac host, the wire protocol, the iPadOS and iOS app, and the
+relay are built, run end to end, and are covered by unit tests, host tests over a real socket,
+relay tests against the real Worker running locally, and UI tests that drive the app in the
+Simulator against live shells. See "Trying the proof of concept" below for what works and what
+does not.
 
 ## Purpose
 
@@ -81,23 +85,110 @@ Three consequences, all of which are acceptable:
 - Closing a tab from the device closes it in its Mac pane group. If it was that group's last tab, the
   pane closes, exactly as it does on the Mac.
 
+## An agent tab is a conversation, not a screen
+
+A phone cannot usefully show a hundred-column terminal grid. Scaling the type until the Mac's whole
+pane fits lands at about six points on a phone in portrait, which leaves the text at the edge of
+legibility and most of the screen empty. That is not a layout problem to solve. It is the fixed
+aspect ratio of a mirrored grid meeting a small display.
+
+An agent tab does not have to be mirrored, because the agent is not really drawing a screen. It is
+having a conversation, and it already keeps its own structured record of one.
+
+Claude Code appends one JSON object per line to `~/.claude/projects/<slug>/<sessionID>.jsonl` while
+a session runs. Every turn is separated, and every tool call already carries its name and its whole
+input. The host reads that file and sends messages. Nothing parses a terminal.
+
+### What decides which surface a tab opens
+
+The tab's agent session does.
+
+- A tab whose agent MyTerm can read opens the conversation.
+- Every other tab opens the terminal, unchanged.
+- The raw terminal stays one tap away inside the conversation. Anything the conversation cannot
+  express is still reachable, and that escape is what makes a simplified view safe to show first.
+
+### Finding the file
+
+By session identifier alone, searching `~/.claude/projects/*/<sessionID>.jsonl`.
+
+Rebuilding the agent's own directory name from the pane's working directory is not reliable: the
+directory is fixed when the session starts and the pane's moves as the person works. The identifier
+is a UUID, so a search by name is both simpler and more correct.
+
+The identifier arrives as terminal bytes and is used to build a path, so it is checked again at the
+point of use and refused unless it can only name a file.
+
+### What the device is not sent
+
+- **The session identifier.** A tab carries `hasAgentConversation`, a boolean. The device asks by
+  tab and the host does the looking up. An identifier would be a key to something outside the tree
+  the device was given.
+- **Image bytes.** The device is told an image was there, which explains the gap and costs nothing.
+- **Anything uncapped.** A transcript holds whole files and whole command outputs. Every block, every
+  tool detail, and the backlog as a whole are cut against `RemoteAgentLimits` before they reach the
+  wire, and the device says so rather than presenting a cut file as a whole one.
+
+### Following it
+
+The file is append-only while a session runs, so following it means remembering an offset and taking
+what arrived since. Three cases break that and each is handled:
+
+- The file does not exist yet, which is normal for the first seconds of a session. Wait and ask again.
+- The last line is half written. Stop the offset at the last newline and take the rest next time.
+- The file got shorter, so it was replaced rather than appended to. Read it again from the start.
+
+Reading happens off the main actor. A long session reaches tens of megabytes, and the host must not
+stop answering a device while it parses one.
+
+### Answering the agent
+
+Not yet built. What is known about it is worth writing down, because the obvious approach is unsafe.
+
+A keystroke written to the pane's TTY does answer a live permission prompt. That was proven against
+a real Claude Code session driven through a PTY: `1` then Return granted the request and the tool ran.
+
+**A hardcoded number must never be sent.** The option list is not stable. One run offered four
+options, where `3` was "Yes, and switch to auto mode": it granted the request *and* turned off every
+later prompt in that session. A device button labelled "Deny" wired to a fixed digit would have done
+the opposite of deny, from a place where nobody could see the consequence.
+
+Two rules follow.
+
+- **Deny is Esc.** Verified: it cancels and nothing runs. It is position independent, so it holds
+  whatever the menu contains.
+- **Allow must match a label, never a position.** The option list is on screen and not in the
+  transcript, so the host has to read the numbered lines from the grid it already serialises and send
+  the digit for the label the person actually tapped. Where it cannot parse a coherent list it must
+  offer no allow button at all and fall back to the terminal.
+
+"Don't ask again" and "switch to auto mode" do not belong on a device. They change what the Mac will
+do unattended, and a phone is the worst place to decide that.
+
 ## Scope
 
 ### In scope for the first release
 
 - One Mac, several linked devices, iPad first.
-- The flattened workspace tree, read-only: folders, workspaces, tabs, titles, colors, pins.
+- The flattened workspace tree: folders, workspaces, tabs, titles, colors, pins.
 - Live attach to any terminal tab, with output and input.
 - The agent attention dot, mirrored from the Mac.
 - Pairing on the local network, a paired-device list, and revocation.
 - Reach from the local network, and reach through the relay from anywhere.
+- An iPad split view, sidebar beside terminal, wherever the width is regular.
+- Renaming and closing a tab, and renaming, creating, and deleting a workspace, from the device.
+  Each is its own message, and each is refused unless the Mac allows devices to type: changing a
+  workspace reaches further than typing does, so it cannot be permitted while typing is not.
+- Creating a terminal tab in any workspace, including one the Mac has not selected.
 
 ### Later
 
-- The iPhone, with the smaller grid and the software keyboard work it forces.
-- Creating, closing, renaming, and selecting tabs and workspaces from the device.
+- Answering an agent from the device: a reply field, and permission buttons under the rules above.
+- The same conversation projection for Codex, whose sessions live under `~/.codex/sessions`
+  in a different shape.
+- Selecting a workspace or tab on the Mac from the device.
 - Push notification when an agent needs attention while the app is closed.
-- An iPad split view, if the flat list proves insufficient.
+- Moving tabs between workspaces, and reordering either, from the device.
 
 ### Never
 
@@ -179,6 +270,35 @@ isolation, as described under Testing.
 
 A raw ring buffer is acceptable in the first milestone, to get the path working end to end. It must
 not be what ships.
+
+**Built and proven.** `TerminalGridSerializer` and `TerminalSGREncoder` live in `MyTermPlatform`, with
+13 round-trip tests. The round trip holds for plain text, the 16 ANSI colors, 256 colors, true color,
+every character style, colored blank runs, cursor position, the bottom-right cell, and double-width
+characters. Deleting the SGR emission fails all 13, so the tests bite.
+
+**The alternate screen needs one resync, in one case.** `Terminal.isCurrentBufferAlternate` is public,
+so the serializer reads it and paints onto the matching buffer. Two tests pin down when that is enough
+and when it is not:
+
+- A device that was in sync **before** a full-screen program started needs nothing. `?1049l` restores
+  each terminal's own saved normal buffer, and the device's copy is already correct.
+- A device that **attaches while** the program is running has an empty normal buffer, because the
+  snapshot painted the alternate screen. When the program exits, that emptiness is revealed.
+
+The second case is the ordinary one for this feature: picking up an iPad while Codex is running. The
+host must send a fresh snapshot when the active buffer changes, through the same `resync` path that
+backpressure uses. `TerminalDelegate.bufferActivated(source:)` is the hook to drive it.
+
+**Two pieces of state cannot be captured.** SwiftTerm keeps both internal with no public getter, so
+the snapshot cannot carry them:
+
+- **Auto-wrap.** The snapshot turns it off to paint and always turns it back on. A session that
+  deliberately disabled auto-wrap gets it re-enabled on the device.
+- **Cursor visibility.** `resetToInitialState()` deliberately preserves `cursorHidden` across `ESC c`,
+  so a cursor hidden on the Mac stays visible on the device.
+
+Neither is likely to matter in practice, and both need an upstream change to fix properly. Record them
+rather than pretending the snapshot is complete.
 
 ### Backpressure
 
@@ -320,17 +440,32 @@ with its own repository, its own deployment, and its own on-call reality.
 
 ### How it works
 
-- Turning on remote reach generates a random 128-bit **rendezvous identifier**, separate from the
-  long-term host key, and registers it with the relay. The relay learns that identifier and nothing
-  else. There is no account, no email, and no hostname.
-- The Mac holds one outbound connection to the relay and keeps it alive. Every connection is outbound,
-  so no port forwarding and no NAT traversal are required.
-- A device receives the rendezvous identifier during pairing, on the local network, inside the
-  authenticated channel. The relay never distributes it.
-- A device connects to the relay naming the identifier. The relay joins the two connections and forwards
-  bytes. It is a pipe and nothing more.
-- Inside that pipe, both sides run a **Noise IK handshake** using the same long-term keys that pairing
-  established. Every frame above it is encrypted and authenticated end to end.
+This is built. The relay is a Cloudflare Worker with one Durable Object per rendezvous, in `relay/`.
+
+- Turning on **Reach this Mac through the relay** generates a random 128-bit **rendezvous
+  identifier** and a random **host key**. The Mac registers the identifier with the relay over one
+  outbound WebSocket, proving itself with the key. The relay stores the first key it sees for an
+  identifier, so no other Mac can take it. There is no account, no email, and no hostname.
+- The Mac keeps that control socket open, with a ping every thirty seconds, and reconnects with
+  backoff when it drops. Every connection is outbound, so no port forwarding and no NAT traversal
+  are required.
+- A device receives the relay's address and the rendezvous identifier inside the pairing code, on
+  the local network. The relay never distributes it.
+- A device connects to the relay naming the identifier. The relay tells the Mac, the Mac opens a
+  session socket, and the relay joins the two and forwards binary frames. It is a pipe and nothing
+  more.
+- Inside that pipe runs **the same TLS session with the same pre-shared key** a device uses on the
+  local network. Each end bridges its socket to a loopback port: the device dials that port with
+  TLS exactly as it dials a Mac, and the Mac connects the session to its own listener. Neither end
+  has a second authentication path, and the relay carries ciphertext from the first byte. The Noise
+  handshake the earlier design called for is not needed, because TLS-PSK already gives the same
+  guarantee with the keys pairing established.
+- Regenerating the token on the Mac also discards the rendezvous, so a device holding an old code
+  cannot even find the Mac at the relay.
+
+A test in `RelayEndToEndTests` records every byte the device sends to and receives from the relay
+and asserts that the workspace name, the screen, the host name, the device name, the typed input,
+and the token never appear in it, and that the first byte is a TLS handshake record.
 
 ### What the relay can still see
 
@@ -340,19 +475,23 @@ Claiming more than this is worse than claiming nothing.
 
 ### Choosing the path
 
-The device tries Bonjour first with a short timeout, roughly 300 ms, and falls back to the relay. A
-session that starts on the relay does not migrate to the local network in the middle of an attachment,
-because a mid-attachment transport change is not worth the failure modes it adds.
+The device tries the Mac's Bonjour name for four seconds, then its address for five, then the
+relay. A session that starts on the relay does not migrate to the local network in the middle of an
+attachment, because a mid-attachment transport change is not worth the failure modes it adds.
 
-The Settings section shows which path a device is using, so a user can tell a slow relay from a slow Mac.
+The device shows a quiet "Through the relay" line while the relay is the route, so a user can tell
+a slow relay from a slow Mac. The Mac's Settings show the relay's state and how many devices are
+connected through it.
 
 ### Hosting
 
-One Durable Object per rendezvous identifier on Cloudflare Workers fits the shape well, because
-WebSocket hibernation makes an idle Mac nearly free. A small Fly.io or Hetzner instance running a
-forwarder is the alternative, and it costs more attention for the same result.
+One Durable Object per rendezvous identifier on Cloudflare Workers. `relay/README.md` has the
+protocol and the deploy steps: `npm install`, `wrangler login`, `npm run deploy`. Put the Worker's
+origin into **Settings → Devices → Relay address** on the Mac. The Worker does not yet use
+WebSocket hibernation, so an idle registered Mac holds a Durable Object awake; that is the first
+thing to change if the bill matters.
 
-Real cost is bytes forwarded during use. Idle registrations are close to free.
+Real cost is bytes forwarded during use.
 
 ### Operational burden to accept
 
@@ -469,6 +608,13 @@ Each milestone ends in something that builds, tests, and can be judged.
 
 **M1 — Shared foundations.** Add iOS to the package platforms. Add `MyTermRemoteProtocol` with the
 message types, the framing, the flattening projection, and codec tests. No transport and no interface.
+*Partly done:* the package declares `.iOS(.v17)`, `MyTermCore` type-checks against the iOS SDK, and
+`script/ios_core_typecheck.sh` guards it in CI. `MyTermRemoteProtocol` does not exist yet.
+
+**M1a — The grid serializer, pulled forward from M6.** It was the only part of this plan with no
+reference implementation, so it ran first, where a bad result would have cost one day instead of five
+milestones. *Done.* The remaining work it identified is the buffer-change resync, which belongs with
+backpressure in M6 rather than with the serializer.
 
 **M2 — Tap the terminal.** Extend `TerminalProcessSession` with the output tap and input injection.
 Implement both in `SwiftTermTerminalSession`. Prove them against the existing fake engine in tests.
@@ -506,6 +652,205 @@ on the framing, not on the app.
 each routed through the existing `AppModel` command.
 
 M1 through M8 are the feature. M9 and M10 extend it.
+
+## Trying the proof of concept
+
+1. Build and run MyTerm on the Mac.
+2. Open **Settings → Devices** and turn on **Allow my devices to reach this Mac**. The Mac listens on
+   port 52130 unless something else holds it, in which case the status line shows the port it took.
+3. Build and run the companion app on the iOS Simulator:
+
+   ```
+   xcodebuild -project apps/MyTermRemote/MyTermRemote.xcodeproj \
+       -scheme MyTermRemote \
+       -destination 'generic/platform=iOS Simulator' build
+   ```
+
+4. In the app, either pick the Mac under **Nearby** in **Add a Mac…** and enter the token, or enter
+   `localhost`, the port, and the token. The simulator shares the Mac's network, so both work. A real
+   device scans the code from **Link a Device…** instead, with the app's own scanner or the Camera app.
+
+The workspace list, the tab list, and a live terminal should follow. The token is what authorizes the
+device: it is the pre-shared key for the TLS handshake, so a wrong token cannot connect at all.
+
+### What is built
+
+- `MyTermRemoteProtocol` — framing, control messages, the flattened tree, the TLS-PSK transport, and
+  `RemoteClient`. Shared by both platforms.
+- `MyTermRemoteHost` — the listener, per-device connections, backpressure, and the resync path.
+- `AppModel+RemoteHost` — the app answering the host with real workspaces and real sessions.
+- Settings → Devices on the Mac.
+- `apps/MyTermRemote` — the iPadOS and iOS app: pairing by scan, by Bonjour, or by address; a
+  remembered list of Macs with tokens in the Keychain; the workspace list with the cook; a live
+  terminal that fits the Mac's grid; browser tabs; rename, close, create and delete from the device;
+  and reconnection with backoff when the connection drops or the app returns to the foreground.
+
+The transport is TLS 1.3 with a pre-shared key derived from the pairing token. Completing the
+handshake is the authentication, so a device without the token cannot connect at all, and nothing on
+the network can read terminal bytes. That is proven by a test that points a client with the wrong
+token at a live listener and requires that it never receives a tree.
+
+### Verifying it by hand
+
+`Tests/MyTermRemoteHostTests/RemoteHostDemo.swift` serves real terminal sessions without the Mac app.
+It is skipped unless asked for:
+
+```
+MYTERM_REMOTE_DEMO=1 MYTERM_REMOTE_DEMO_SECONDS=400 \
+    MYTERM_REMOTE_DEMO_URL_FILE=/tmp/demo-url.txt \
+    swift test --filter RemoteHostDemo
+```
+
+It writes a `myterm-remote://connect?...` URL carrying the port and token. Open that URL on a device,
+or pass the same values to the simulator as launch arguments:
+
+```
+xcrun simctl launch <device> com.gordonbeeming.myterm.remote \
+    -remote.host localhost -remote.port <port> -remote.token demotoken \
+    -remote.reconnectsOnLaunch YES -remote.openTab tab-0
+```
+
+### Trying it on a real iPhone or iPad
+
+The device and the Mac must be on the same Wi-Fi network.
+
+**1. Run MyTerm on the Mac.**
+
+```
+make install && open ~/Applications/myterm.app
+```
+
+**2. Turn the listener on.** Open Settings, then Devices, and switch on **Allow my devices to reach
+this Mac**. The status line shows the port. Copy the pairing token.
+
+**3. Find the Mac's address on the network.**
+
+```
+ipconfig getifaddr en0
+```
+
+**4. Sign the companion app.** Open `apps/MyTermRemote/MyTermRemote.xcodeproj` in Xcode.
+
+- Xcode → Settings → Accounts, and add the Apple ID if it is not there. A free Apple ID works.
+- Select the MyTermRemote target, then Signing & Capabilities, and choose a Team.
+- Xcode registers the device and creates the profile the first time it builds.
+
+The team is recorded in `project.yml` as well, so regenerating the project with `xcodegen generate`
+keeps it. Change `DEVELOPMENT_TEAM` there for a different account.
+
+**5. Build to the device.** Pick the iPhone or iPad in the destination menu and press Run. On the
+device, trust the developer certificate under Settings → General → VPN & Device Management if iOS
+asks.
+
+**6. Connect.** Press **Scan Pairing Code** and point the device at the code from **Link a
+Device…** on the Mac, or open **Add a Mac…**, pick the Mac under **Nearby**, and enter the token.
+**iOS asks for permission to find devices on the local network. Allow it.** Refusing leaves the
+connection failing, and the app says so in words rather than with a code.
+
+### How a device finds its Mac again
+
+A saved Mac keeps two ways of being reached, and the device tries them in order:
+
+1. **By name.** The pairing code carries the Bonjour name the Mac advertises. A Mac whose address
+   changed, which is what DHCP does across a week, is still found this way on the local network.
+2. **By address.** The host and port from the code, or from the last successful connection. This is
+   what works where there is no Bonjour to ask, and it is why the Mac listens on a fixed port.
+
+A Mac found by name has its address recorded once it answers, so both routes stay usable.
+
+### When the connection drops
+
+The workspace screens stay where they are. A banner says the Mac was lost, the device tries again at
+1, 2, 4, 8, 15 and 30 seconds, and stops with a **Retry** button after that. Returning to the
+foreground tries at once, because iOS closes the socket of a suspended app and that is the common
+case. An open terminal attaches again on its own once the Mac answers. **Leave** is the way out.
+
+A failure before the first welcome is a refusal, not a loss, and it is reported in plain words on the
+list of Macs: nothing listening, the wrong token, or a Mac that cannot be reached, each with what to
+do about it.
+
+### What the first release does not do
+
+- The relay is not deployed by this repository. Deploying it, and owning it, is a decision: see
+  the "Operational burden to accept" section.
+- The tree is polled once a second rather than pushed as a delta.
+- Pairing tokens are standing, not one-shot: a code stays valid until the token is regenerated on
+  the Mac. The Mac's Settings say so.
+- **The device never tells the host its size.** The device shrinks its type until the Mac's whole
+  grid fits, down to a floor where it clips instead. This is the mirror-only decision from the grid
+  size section above. A Mac pane wider than about a hundred columns is hard to read on a phone in
+  portrait, and rotating the phone is the answer for now.
+- The terminal grid is not readable by VoiceOver.
+
+### The relay tests
+
+`Tests/MyTermRemoteHostTests/RelayEndToEndTests.swift` starts the real Worker with `wrangler dev`
+and pushes a Mac and a device through it: a device reaches the Mac with no address at all, a device
+is told when the Mac is not on the relay, a wrong token still fails, the address is tried before the
+relay, and the relay sees only ciphertext. They are skipped until the Worker's dependencies exist:
+
+```
+cd relay && npm install
+swift test --filter RelayEndToEndTests
+```
+
+The Worker's own protocol tests run with `cd relay && npm test`.
+
+### The whole flow on one machine
+
+Everything can be exercised locally, relay included, with nothing deployed.
+
+**Scripted.** With `relay/node_modules` present, `make ui-test` starts a local Worker, registers the
+demo host with it, and adds a UI test in which the device is given an address nothing listens on,
+so its only way in is the relay. The test checks the "Through the relay" line and types a command
+that the shell on the Mac runs.
+
+**By hand, with the real Mac app.**
+
+```
+cd relay && npm run dev                                  # the Worker on http://127.0.0.1:8787
+defaults write com.gordonbeeming.myterm.dev remote.listenerEnabled -bool true
+defaults write com.gordonbeeming.myterm.dev remote.relayURL -string http://127.0.0.1:8787
+defaults write com.gordonbeeming.myterm.dev remote.relayEnabled -bool true
+./run.sh                                                 # the development Mac app
+```
+
+Settings → Devices then shows the relay as connected. To make the Simulator use the relay rather
+than the loopback address, give it an address nothing listens on:
+
+```
+xcrun simctl launch booted com.gordonbeeming.myterm.remote \
+    -remote.host 127.0.0.1 -remote.port 1 \
+    -remote.token "$(defaults read com.gordonbeeming.myterm.dev remote.token)" \
+    -remote.relay http://127.0.0.1:8787 \
+    -remote.rendezvous "$(defaults read com.gordonbeeming.myterm.dev remote.relayIdentifier)" \
+    -remote.reconnectsOnLaunch YES
+```
+
+The device lists the Mac's real workspaces with "Through the relay" beneath them.
+
+### The UI tests
+
+`apps/MyTermRemote/Tests/MyTermRemoteUITests` drives the app the way a person does: first run,
+adding a Mac by hand, a wrong token, opening a terminal and typing into a real shell, the browser
+tab, the close confirmation, a refused change, and disconnecting. They need a live host, and
+`script/ui_test.sh` supplies one by running `RemoteHostDemo`:
+
+```
+make ui-test                                  # iPhone 17 Pro
+make ui-test SIMULATOR="iPad Pro 13-inch (M5)"
+```
+
+Screenshots of every step land in `dist/ui-shots`.
+
+### Two pins that have to stay in sync
+
+The iOS app cannot reach SwiftTerm through the local package: SwiftTerm is a dependency of
+`MyTermPlatform`, which imports AppKit, and it is not re-exported as a product. The app therefore
+declares SwiftTerm as its own package in `apps/MyTermRemote/project.yml`, pinned to the same exact
+version as the root `Package.resolved`.
+
+Changing SwiftTerm's version means changing it in both places. Nothing enforces that yet.
 
 ## Testing
 

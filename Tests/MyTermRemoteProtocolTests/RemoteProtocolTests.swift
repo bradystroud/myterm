@@ -1,0 +1,311 @@
+import Foundation
+import XCTest
+@testable import MyTermRemoteProtocol
+
+final class RemoteProtocolTests: XCTestCase {
+    // MARK: - RemoteFrameCodec / RemoteFrameDecoder
+
+    func testEncodeThenDecodeRoundTripsEveryFrameKind() throws {
+        for kind in RemoteFrameKind.allCases {
+            let frame = RemoteFrame(kind: kind, payload: [1, 2, 3, 4, 5])
+            var decoder = RemoteFrameDecoder()
+            decoder.append(RemoteFrameCodec.encode(frame))
+
+            let decoded = try decoder.nextFrame()
+
+            XCTAssertEqual(decoded, frame)
+        }
+    }
+
+    func testDecoderReassemblesAFrameFedOneByteAtATime() throws {
+        let frame = RemoteFrame(kind: .output, payload: Array("hello".utf8))
+        let encoded = RemoteFrameCodec.encode(frame)
+        var decoder = RemoteFrameDecoder()
+
+        for (index, byte) in encoded.enumerated() {
+            decoder.append([byte])
+            let isLastByte = index == encoded.count - 1
+            let decoded = try decoder.nextFrame()
+            if isLastByte {
+                XCTAssertEqual(decoded, frame)
+            } else {
+                XCTAssertNil(decoded)
+            }
+        }
+    }
+
+    func testDecoderReturnsSeveralFramesDeliveredInOneAppendInOrder() throws {
+        let first = RemoteFrame(kind: .input, payload: [9])
+        let second = RemoteFrame(kind: .output, payload: [1, 2])
+        let third = RemoteFrame(kind: .control, payload: [])
+        var decoder = RemoteFrameDecoder()
+        decoder.append(RemoteFrameCodec.encode(first) + RemoteFrameCodec.encode(second) + RemoteFrameCodec.encode(third))
+
+        XCTAssertEqual(try decoder.nextFrame(), first)
+        XCTAssertEqual(try decoder.nextFrame(), second)
+        XCTAssertEqual(try decoder.nextFrame(), third)
+        XCTAssertNil(try decoder.nextFrame())
+    }
+
+    func testDecoderReassemblesAFrameSplitAcrossTwoChunks() throws {
+        let frame = RemoteFrame(kind: .output, payload: Array(repeating: UInt8(7), count: 40))
+        let encoded = RemoteFrameCodec.encode(frame)
+        let splitPoint = 17
+        var decoder = RemoteFrameDecoder()
+
+        decoder.append(encoded[0..<splitPoint])
+        XCTAssertNil(try decoder.nextFrame())
+
+        decoder.append(encoded[splitPoint...])
+        XCTAssertEqual(try decoder.nextFrame(), frame)
+    }
+
+    func testNextFrameReturnsNilRatherThanThrowingWhenBytesAreIncomplete() throws {
+        var decoder = RemoteFrameDecoder()
+
+        XCTAssertNil(try decoder.nextFrame())
+
+        decoder.append([0, 0, 0])
+        XCTAssertNil(try decoder.nextFrame())
+
+        decoder.append([5, RemoteFrameKind.control.rawValue, 1, 2])
+        XCTAssertNil(try decoder.nextFrame())
+    }
+
+    func testDeclaredLengthOfZeroThrowsEmptyFrame() throws {
+        var decoder = RemoteFrameDecoder()
+        decoder.append([0, 0, 0, 0])
+
+        XCTAssertThrowsError(try decoder.nextFrame()) { error in
+            XCTAssertEqual(error as? RemoteFrameError, .emptyFrame)
+        }
+    }
+
+    func testDeclaredLengthAboveMaximumThrowsFrameTooLargeWithoutAllocatingIt() throws {
+        let excessiveLength = RemoteFrameCodec.maximumFrameBytes + 1
+        var decoder = RemoteFrameDecoder()
+        decoder.append([
+            UInt8(truncatingIfNeeded: excessiveLength >> 24),
+            UInt8(truncatingIfNeeded: excessiveLength >> 16),
+            UInt8(truncatingIfNeeded: excessiveLength >> 8),
+            UInt8(truncatingIfNeeded: excessiveLength),
+        ])
+
+        XCTAssertThrowsError(try decoder.nextFrame()) { error in
+            XCTAssertEqual(error as? RemoteFrameError, .frameTooLarge(excessiveLength))
+        }
+    }
+
+    func testUnknownFrameKindByteThrowsUnknownKind() throws {
+        var decoder = RemoteFrameDecoder()
+        // Length 1, then a kind byte no RemoteFrameKind case claims.
+        decoder.append([0, 0, 0, 1, 0xFF])
+
+        XCTAssertThrowsError(try decoder.nextFrame()) { error in
+            XCTAssertEqual(error as? RemoteFrameError, .unknownKind(0xFF))
+        }
+    }
+
+    // MARK: - RemoteSessionPayload
+
+    func testRemoteSessionPayloadRoundTripsUUIDAndBytes() throws {
+        let session = UUID()
+        let bytes: [UInt8] = [10, 20, 30, 40]
+
+        let encoded = RemoteSessionPayload.encode(session: session, bytes: bytes)
+        let decoded = try XCTUnwrap(RemoteSessionPayload.decode(encoded))
+
+        XCTAssertEqual(decoded.session, session)
+        XCTAssertEqual(decoded.bytes, bytes)
+    }
+
+    func testRemoteSessionPayloadRoundTripsAnEmptyByteArray() throws {
+        let session = UUID()
+
+        let encoded = RemoteSessionPayload.encode(session: session, bytes: [])
+        let decoded = try XCTUnwrap(RemoteSessionPayload.decode(encoded))
+
+        XCTAssertEqual(decoded.session, session)
+        XCTAssertEqual(decoded.bytes, [])
+    }
+
+    func testRemoteSessionPayloadDecodeReturnsNilForAPayloadShorterThanSixteenBytes() {
+        let tooShort = Array(repeating: UInt8(1), count: 15)
+
+        XCTAssertNil(RemoteSessionPayload.decode(tooShort))
+    }
+
+    // MARK: - RemoteControlCodec / RemoteControlMessage
+
+    func testRemoteControlCodecRoundTripsEveryMessageCase() throws {
+        let session = UUID()
+        let messages: [RemoteControlMessage] = [
+            .hello(RemoteHello(deviceName: "iPhone", token: "shared-secret")),
+            .welcome(RemoteWelcome(hostName: "Gordon's Mac", allowsInput: true)),
+            .tree(sampleTree()),
+            .attach(RemoteAttach(tabID: "tab-1")),
+            .attached(RemoteAttached(tabID: "tab-1", session: session, columns: 80, rows: 24)),
+            .detach(session: session),
+            .resync(session: session),
+            .agentActivity(RemoteAgentActivity(tabID: "tab-1", activity: .awaitingInput)),
+            .error(RemoteError(code: "not_found", message: "No such tab.")),
+        ]
+
+        for message in messages {
+            let frame = try RemoteControlCodec.encode(message)
+            let decoded = try RemoteControlCodec.decode(frame)
+
+            XCTAssertEqual(decoded, message)
+            XCTAssertEqual(frame.kind, .control)
+        }
+    }
+
+    // MARK: - RemoteAgentActivity.needsAttention
+
+    func testRemoteAgentActivityNeedsAttentionIsDerivedFromTheActivity() {
+        XCTAssertFalse(RemoteAgentActivity(tabID: "tab-1", activity: nil).needsAttention)
+        XCTAssertFalse(RemoteAgentActivity(tabID: "tab-1", activity: .working).needsAttention)
+        XCTAssertTrue(RemoteAgentActivity(tabID: "tab-1", activity: .finished).needsAttention)
+        XCTAssertTrue(RemoteAgentActivity(tabID: "tab-1", activity: .awaitingInput).needsAttention)
+    }
+
+    // MARK: - RemoteTab.agentActivity / needsAttention
+
+    func testRemoteTabDerivesNeedsAttentionFromAgentActivityWhenNotGivenExplicitly() {
+        let workingTab = RemoteTab(id: "tab-1", kind: .terminal, title: "Shell", agentActivity: .working)
+        let finishedTab = RemoteTab(id: "tab-2", kind: .terminal, title: "Shell", agentActivity: .finished)
+        let quietTab = RemoteTab(id: "tab-3", kind: .terminal, title: "Shell")
+
+        XCTAssertFalse(workingTab.needsAttention)
+        XCTAssertTrue(finishedTab.needsAttention)
+        XCTAssertFalse(quietTab.needsAttention)
+    }
+
+    // MARK: - RemoteWorkspace.agentActivity
+
+    func testRemoteWorkspaceAgentActivityIsTheMostUrgentOfItsTabs() {
+        let workspace = RemoteWorkspace(
+            id: "workspace-1",
+            title: "Development",
+            tabs: [
+                RemoteTab(id: "tab-1", kind: .terminal, title: "Shell", agentActivity: .working),
+                RemoteTab(id: "tab-2", kind: .terminal, title: "Agent", agentActivity: .finished),
+                RemoteTab(id: "tab-3", kind: .terminal, title: "Other", agentActivity: .awaitingInput),
+            ]
+        )
+
+        XCTAssertEqual(workspace.agentActivity, .awaitingInput)
+    }
+
+    func testRemoteWorkspaceAgentActivityIsNilWhenNoTabHasOne() {
+        let workspace = RemoteWorkspace(
+            id: "workspace-1",
+            title: "Development",
+            tabs: [RemoteTab(id: "tab-1", kind: .terminal, title: "Shell")]
+        )
+
+        XCTAssertNil(workspace.agentActivity)
+    }
+
+    // MARK: - RemoteWorkspace.needsAttention
+
+    func testWorkspaceNeedsAttentionIsTrueWhenAnyTabNeedsAttention() {
+        let workspace = RemoteWorkspace(
+            id: "workspace-1",
+            title: "Development",
+            tabs: [
+                RemoteTab(id: "tab-1", kind: .terminal, title: "Shell", needsAttention: false),
+                RemoteTab(id: "tab-2", kind: .terminal, title: "Agent", needsAttention: true),
+            ]
+        )
+
+        XCTAssertTrue(workspace.needsAttention)
+    }
+
+    func testWorkspaceNeedsAttentionIsFalseWhenNoTabNeedsAttention() {
+        let workspace = RemoteWorkspace(
+            id: "workspace-1",
+            title: "Development",
+            tabs: [
+                RemoteTab(id: "tab-1", kind: .terminal, title: "Shell", needsAttention: false),
+                RemoteTab(id: "tab-2", kind: .browser, title: "Docs", url: "https://example.com", needsAttention: false),
+            ]
+        )
+
+        XCTAssertFalse(workspace.needsAttention)
+    }
+
+    // MARK: - Fixtures
+
+    private func sampleTree() -> RemoteTree {
+        let folder = RemoteFolder(id: "folder-1", title: "Client Work", colorName: "blue")
+        let terminalTab = RemoteTab(
+            id: "tab-1",
+            kind: .terminal,
+            title: "Shell",
+            subtitle: "myterm",
+            needsAttention: false,
+            terminalSessionID: UUID()
+        )
+        let browserTab = RemoteTab(
+            id: "tab-2",
+            kind: .browser,
+            title: "Docs",
+            url: "https://example.com/docs",
+            needsAttention: true
+        )
+        let firstWorkspace = RemoteWorkspace(
+            id: "workspace-1",
+            title: "Development",
+            emoji: "🟢",
+            colorName: "green",
+            folderID: folder.id,
+            isPinned: true,
+            tabs: [terminalTab, browserTab]
+        )
+        let secondWorkspace = RemoteWorkspace(
+            id: "workspace-2",
+            title: "Scratch",
+            tabs: [
+                RemoteTab(id: "tab-3", kind: .terminal, title: "Shell", needsAttention: false),
+            ]
+        )
+        return RemoteTree(revision: 1, folders: [folder], workspaces: [firstWorkspace, secondWorkspace])
+    }
+
+    // MARK: - Mutation messages
+
+    /// Each change is its own message. Round-tripping the whole set catches a case added to the enum
+    /// without the hand-written `Codable` learning about it, which would otherwise fail only on the
+    /// wire, on a device, against a Mac nobody is watching.
+    func testEveryMutationMessageSurvivesTheWire() throws {
+        let messages: [RemoteControlMessage] = [
+            .renameTab(RemoteRenameTab(tabID: "tab-1", title: "build")),
+            .renameTab(RemoteRenameTab(tabID: "tab-1", title: nil)),
+            .closeTab(RemoteCloseTab(tabID: "tab-1")),
+            .renameWorkspace(RemoteRenameWorkspace(workspaceID: "ws-1", title: "api")),
+            .createWorkspace(RemoteCreateWorkspace(title: "scratch", folderID: "folder-1")),
+            .createWorkspace(RemoteCreateWorkspace()),
+            .deleteWorkspace(RemoteDeleteWorkspace(workspaceID: "ws-1")),
+            .createTerminalTab(RemoteCreateTerminalTab(workspaceID: "ws-1")),
+        ]
+
+        for message in messages {
+            let decoded = try RemoteControlCodec.decode(RemoteControlCodec.encode(message))
+            XCTAssertEqual(decoded, message)
+        }
+    }
+
+    /// A cleared name is not the same as the name "nil", and the difference decides whether a tab
+    /// goes back to titling itself.
+    func testClearingATabTitleCrossesTheWireAsAbsentRatherThanEmpty() throws {
+        let message = RemoteControlMessage.renameTab(RemoteRenameTab(tabID: "tab-1", title: nil))
+
+        let decoded = try RemoteControlCodec.decode(RemoteControlCodec.encode(message))
+
+        guard case .renameTab(let request) = decoded else {
+            return XCTFail("the message changed kind on the way through")
+        }
+        XCTAssertNil(request.title)
+    }
+}
