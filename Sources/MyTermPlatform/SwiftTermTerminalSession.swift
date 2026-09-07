@@ -173,6 +173,18 @@ public final class SwiftTermTerminalSession: NSObject, TerminalProcessSession {
         terminal.setPaneActive(isActive)
     }
 
+    public func setOutputTap(_ tap: (@MainActor (ArraySlice<UInt8>) -> Void)?) {
+        terminal.onOutputReceived = tap
+    }
+
+    public func sendInput(_ bytes: ArraySlice<UInt8>) {
+        terminal.send(data: bytes)
+    }
+
+    public func gridSnapshot() -> TerminalGridSnapshot? {
+        TerminalGridSerializer.snapshot(of: terminal.getTerminal())
+    }
+
     private func emitTermination(exitCode: Int32?) {
         guard !didTerminate else { return }
         didTerminate = true
@@ -214,6 +226,7 @@ final class MyTermLocalProcessTerminalView: LocalProcessTerminalView {
     var onOpenWebURL: ((URL) -> Void)?
     var onContentChanged: (() -> Void)?
     var onAgentActivity: ((AgentActivityReport) -> Void)?
+    var onOutputReceived: (@MainActor (ArraySlice<UInt8>) -> Void)?
     var currentWorkingDirectory: URL?
     private let contentChangeCoalescer = TerminalContentChangeCoalescer()
     // AppKit owns local monitor tokens and requires the opaque value again for removal.
@@ -270,6 +283,7 @@ final class MyTermLocalProcessTerminalView: LocalProcessTerminalView {
         defer { allowMouseReporting = originalMouseReporting }
 
         super.dataReceived(slice: slice)
+        onOutputReceived?(slice)
         let hadPendingMovement = wordSelectionInput.hasPendingMovement
         let pendingInput = wordSelectionInput.observeCursorPosition(
             terminalInputCursorPosition(),

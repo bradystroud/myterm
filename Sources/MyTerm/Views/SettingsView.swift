@@ -13,6 +13,10 @@ struct SettingsView: View {
     @State private var claudeHooks = AgentHooksController(target: .claude)
     @State private var codexHooks = AgentHooksController(target: .codex)
     @State private var installedBrowsers = ExternalBrowserCatalog.installedBrowsers()
+    /// The port the pairing sheet is showing. Non-nil is what presents the sheet, so the sheet can
+    /// never be open for a listener that has since stopped.
+    @State private var pairingPort: PairingPort?
+    @State private var relayURLText = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,6 +35,9 @@ struct SettingsView: View {
 
                 browserSettings
                     .tabItem { Label("Browser", systemImage: "globe") }
+
+                devicesSettings
+                    .tabItem { Label("Devices", systemImage: "macbook.and.iphone") }
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 12)
@@ -591,6 +598,151 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var devicesSettings: some View {
+        Form {
+            Section("Devices") {
+                Toggle("Allow my devices to reach this Mac", isOn: remoteHostAllowedBinding)
+
+                LabeledContent("Status") {
+                    Text(remoteHostStatusText)
+                        .foregroundStyle(.secondary)
+                }
+
+                if case .failed(let message) = model.remoteHost.state {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .accessibilityLabel("Remote listener error: \(message)")
+                }
+
+                LabeledContent("Pairing token") {
+                    HStack(spacing: 8) {
+                        Text(model.remoteHost.token)
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+
+                        Button("Copy") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(model.remoteHost.token, forType: .string)
+                        }
+
+                        Button("Regenerate") {
+                            model.regenerateRemoteHostToken()
+                        }
+                    }
+                }
+
+                Text("A device needs this token once, to pair. It does not need it again.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                if case .listening(let port) = model.remoteHost.state {
+                    Button("Link a Device…") { pairingPort = PairingPort(value: port) }
+                } else {
+                    Button("Link a Device…") {}
+                        .disabled(true)
+                        .help("Turn on \"Allow my devices to reach this Mac\" first.")
+                }
+
+                Toggle("Allow devices to type", isOn: Binding(
+                    get: { model.remoteHost.allowsInput },
+                    set: { model.remoteHost.allowsInput = $0 }
+                ))
+
+                connectedDevicesList
+
+                Text("A sleeping Mac cannot be reached.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Text("MyTerm sends terminal content only to devices holding this token, and never to any server.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Reach from anywhere") {
+                TextField("Relay address", text: $relayURLText, prompt: Text("https://myterm-relay.example.workers.dev"))
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { model.setRelay(urlText: relayURLText, enabled: model.isRelayEnabled) }
+
+                Toggle("Reach this Mac through the relay", isOn: Binding(
+                    get: { model.isRelayEnabled },
+                    set: { model.setRelay(urlText: relayURLText, enabled: $0) }
+                ))
+                .disabled(AppModel.relayURL(from: relayURLText) == nil)
+
+                LabeledContent("Relay") {
+                    Text(relayStatusText)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("The relay joins a device to this Mac when they are not on the same network. It carries the same encrypted bytes a device would receive here, so it can see that a device and this Mac are talking, when, and how much, and nothing else. Devices linked while this is on can use it.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { relayURLText = model.relayURLText }
+        .sheet(item: $pairingPort) { port in
+            DevicePairingSheet(
+                port: port.value,
+                token: model.remoteHost.token,
+                serviceName: model.remoteHost.hostName,
+                relay: model.relayEndpoint
+            ) {
+                pairingPort = nil
+            }
+        }
+    }
+
+    private var relayStatusText: String {
+        guard model.isRelayEnabled else { return "Off" }
+        guard let link = model.relayLink else { return "Waiting for the listener" }
+        switch link.state {
+        case .off: return "Off"
+        case .connecting: return "Connecting…"
+        case .connected:
+            return link.sessionCount == 0
+                ? "Connected"
+                : "Connected, \(link.sessionCount) device\(link.sessionCount == 1 ? "" : "s") through it"
+        case .retrying(let message): return "Retrying. \(message)"
+        }
+    }
+
+    @ViewBuilder
+    private var connectedDevicesList: some View {
+        if model.remoteHost.connectedDevices.isEmpty {
+            Text("No devices connected")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(model.remoteHost.connectedDevices) { device in
+                Text(device.name)
+            }
+        }
+    }
+
+    private var remoteHostAllowedBinding: Binding<Bool> {
+        Binding(
+            get: {
+                switch model.remoteHost.state {
+                case .stopped, .failed: false
+                case .starting, .listening: true
+                }
+            },
+            set: { model.setRemoteHostEnabled($0) }
+        )
+    }
+
+    private var remoteHostStatusText: String {
+        switch model.remoteHost.state {
+        case .stopped: "Off"
+        case .starting: "Starting…"
+        case .listening(let port): "Listening on port \(port)"
+        case .failed: "Failed"
+        }
     }
 
     private var passkeyDescription: String {
