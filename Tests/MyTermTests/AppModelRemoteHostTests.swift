@@ -108,6 +108,86 @@ final class AppModelRemoteHostTests: XCTestCase {
         XCTAssertFalse(tab.needsAttention, "a working agent is not yet asking for the user")
     }
 
+    // MARK: - The agent conversation a device can open
+
+    func testATabRunningAClaudeConversationOffersItToTheDevice() throws {
+        let engine = StubTerminalEngine()
+        let (model, directory) = try makeModel(engine: engine)
+        defer { removeTemporaryDirectory(directory) }
+
+        let workspace = model.selectedWorkspace
+        let group = try XCTUnwrap(workspace.orderedGroups.first)
+        let tabID = group.selectedTabID
+        let handle = try XCTUnwrap(AgentSessionHandle(agent: "claude", sessionID: "abc-123"))
+        try model.store.updateTerminalAgentSession(
+            workspaceID: workspace.id,
+            tabGroupID: group.id,
+            tabID: tabID,
+            agentSession: handle
+        )
+
+        XCTAssertEqual(
+            model.agentSession(tabID: tabID.description),
+            RemoteAgentSession(agent: "claude", sessionID: "abc-123")
+        )
+
+        let tab = try XCTUnwrap(model.remoteTree().workspaces.first?.tabs.first { $0.id == tabID.description })
+        XCTAssertTrue(tab.hasAgentConversation, "the device needs to know which surface to open")
+    }
+
+    func testTheDeviceIsNeverToldWhichConversationItIs() throws {
+        // The identifier names a file on this Mac. A device asks by tab and the host does the
+        // looking up, so nothing on the wire is a key to anything outside the tree it was given.
+        let engine = StubTerminalEngine()
+        let (model, directory) = try makeModel(engine: engine)
+        defer { removeTemporaryDirectory(directory) }
+
+        let workspace = model.selectedWorkspace
+        let group = try XCTUnwrap(workspace.orderedGroups.first)
+        let handle = try XCTUnwrap(AgentSessionHandle(agent: "claude", sessionID: "secret-id-42"))
+        try model.store.updateTerminalAgentSession(
+            workspaceID: workspace.id,
+            tabGroupID: group.id,
+            tabID: group.selectedTabID,
+            agentSession: handle
+        )
+
+        let encoded = try JSONEncoder().encode(model.remoteTree())
+        let text = String(decoding: encoded, as: UTF8.self)
+        XCTAssertFalse(text.contains("secret-id-42"))
+    }
+
+    func testATabWithNoAgentOffersNoConversation() throws {
+        let engine = StubTerminalEngine()
+        let (model, directory) = try makeModel(engine: engine)
+        defer { removeTemporaryDirectory(directory) }
+
+        let tabID = try XCTUnwrap(model.selectedWorkspace.orderedGroups.first).selectedTabID
+        XCTAssertNil(model.agentSession(tabID: tabID.description))
+
+        let tab = try XCTUnwrap(model.remoteTree().workspaces.first?.tabs.first { $0.id == tabID.description })
+        XCTAssertFalse(tab.hasAgentConversation)
+    }
+
+    func testACodexTabStaysOnTheTerminal() throws {
+        // Codex reports a new identifier every turn, and its record is not the one this projects.
+        let engine = StubTerminalEngine()
+        let (model, directory) = try makeModel(engine: engine)
+        defer { removeTemporaryDirectory(directory) }
+
+        let workspace = model.selectedWorkspace
+        let group = try XCTUnwrap(workspace.orderedGroups.first)
+        let handle = try XCTUnwrap(AgentSessionHandle(agent: "codex", sessionID: "abc-123"))
+        try model.store.updateTerminalAgentSession(
+            workspaceID: workspace.id,
+            tabGroupID: group.id,
+            tabID: group.selectedTabID,
+            agentSession: handle
+        )
+
+        XCTAssertNil(model.agentSession(tabID: group.selectedTabID.description))
+    }
+
     func testTheTreeRevisionChangesWhenAWorkspaceIsAdded() throws {
         let engine = StubTerminalEngine()
         let (model, directory) = try makeModel(engine: engine)
