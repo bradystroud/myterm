@@ -1959,6 +1959,12 @@ final class AppModel {
                 tabID: tabID,
                 sessionID: sessionID
             )
+            forgetAgentSessionOfIdlePane(
+                workspaceID: workspaceID,
+                tabGroupID: tabGroupID,
+                tabID: tabID,
+                sessionID: sessionID
+            )
         }
     }
 
@@ -2160,7 +2166,10 @@ final class AppModel {
         } else {
             workingDirectory = try newSessionWorkingDirectory(for: workspaceID)
         }
-        if session.workingDirectory?.standardizedFileURL != workingDirectory {
+        // An agent conversation belongs to the directory it ran in, so a pane that had to fall back
+        // to another directory has nothing there to rejoin.
+        let keepsSavedDirectory = session.workingDirectory?.standardizedFileURL == workingDirectory
+        if !keepsSavedDirectory {
             try store.updateTerminalWorkingDirectory(
                 workspaceID: workspaceID,
                 tabGroupID: tabGroupID,
@@ -2172,7 +2181,8 @@ final class AppModel {
             configuration: TerminalSessionConfiguration(
                 shell: shellURL(for: settings.shell),
                 workingDirectory: workingDirectory,
-                initialCommand: initialCommand,
+                initialCommand: initialCommand
+                    ?? (keepsSavedDirectory ? agentResumeCommand(for: session, settings: settings) : nil),
                 environment: MyTermBrowserLauncher.environment(
                     executableURL: browserLauncherURL,
                     workspaceID: workspaceID,
@@ -2381,6 +2391,13 @@ final class AppModel {
                 workspaceID: workspaceID,
                 tabGroupID: tabGroupID,
                 tabID: tabID
+            )
+            recordAgentSession(
+                report,
+                workspaceID: workspaceID,
+                tabGroupID: tabGroupID,
+                tabID: tabID,
+                sessionID: sessionID
             )
         case .titleChanged:
             break

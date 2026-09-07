@@ -17,13 +17,21 @@ final class AgentHooksControllerTests: XCTestCase {
         let hooks = try XCTUnwrap(settings["hooks"] as? [String: Any])
         XCTAssertEqual(
             Set(controller.installedEvents(in: settings)),
-            ["UserPromptSubmit", "Stop", "Notification"]
+            ["SessionStart", "UserPromptSubmit", "Stop", "Notification", "SessionEnd"]
         )
         let stop = try XCTUnwrap((hooks["Stop"] as? [[String: Any]])?.first)
         let command = try XCTUnwrap((stop["hooks"] as? [[String: Any]])?.first?["command"] as? String)
         XCTAssertTrue(command.contains("MYTERM_PANE_ID"), "The hook must stay silent outside MyTerm")
-        XCTAssertTrue(command.contains("7337;agent=claude;event=finished"))
+        XCTAssertTrue(command.contains("7337;agent=claude;event=finished;session=%s"))
+        XCTAssertTrue(command.contains("session_id"), "The hook must report the conversation to resume")
         XCTAssertTrue(command.hasSuffix(AgentHooksController.marker))
+
+        // Starting or resuming a session must not report work in progress: the pane is sitting
+        // where the user left it.
+        let sessionStart = try XCTUnwrap((hooks["SessionStart"] as? [[String: Any]])?.first)
+        let startCommand = try XCTUnwrap((sessionStart["hooks"] as? [[String: Any]])?.first?["command"] as? String)
+        XCTAssertTrue(startCommand.contains("event=ready"))
+        XCTAssertFalse(startCommand.contains("event=working"))
     }
 
     func testInstallKeepsEverythingElseInTheFile() throws {
@@ -50,7 +58,9 @@ final class AgentHooksControllerTests: XCTestCase {
         let stopCommands = commands(in: hooks["Stop"])
         XCTAssertTrue(stopCommands.contains("/usr/local/bin/another-tool"))
         XCTAssertEqual(stopCommands.filter { $0.hasSuffix(AgentHooksController.marker) }.count, 1)
-        XCTAssertEqual(commands(in: hooks["SessionStart"]), ["/usr/local/bin/session-start"])
+        let sessionStartCommands = commands(in: hooks["SessionStart"])
+        XCTAssertTrue(sessionStartCommands.contains("/usr/local/bin/session-start"))
+        XCTAssertEqual(sessionStartCommands.filter { $0.hasSuffix(AgentHooksController.marker) }.count, 1)
     }
 
     func testInstallingTwiceLeavesOneHook() throws {

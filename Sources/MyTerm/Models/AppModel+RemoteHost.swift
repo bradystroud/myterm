@@ -15,19 +15,31 @@ extension AppModel: RemoteHostDataSource {
             revision: remoteTreeRevision,
             folders: folders,
             workspaces: workspaces,
-            agentActivity: { [weak self] tabID in self?.agentAttention[tabID] }
+            agentActivity: { [weak self] tabID in self?.agentAttention[tabID] },
+            hasAgentConversation: { [weak self] tabID in
+                self?.agentSession(tabID: tabID.description) != nil
+            }
         )
     }
 
     /// Which conversation a tab's agent is in.
     ///
     /// The agent reports its own conversation identifier through the same hook that reports what it
-    /// is doing, and `AppModel` keeps it beside the attention state. That work lives on
-    /// `feat/agent-attention-dot` and has not reached this branch, so this answers `nil` for now and
-    /// every tab falls back to the terminal. The merge is what turns the conversation screen on;
-    /// nothing else here changes.
+    /// is doing, and the pane keeps it so the conversation can be rejoined after a relaunch. The
+    /// same handle is what lets the host find the transcript to project.
+    ///
+    /// Only agents whose record MyTerm can read are offered. Codex reports a new identifier every
+    /// turn, so its panes stay on the terminal until that projection is written.
     func agentSession(tabID: String) -> RemoteAgentSession? {
-        nil
+        for workspace in workspaces {
+            for tab in workspace.allTabs where tab.id.description == tabID {
+                guard let handle = tab.terminalSession?.agentSession, handle.agent == "claude" else {
+                    return nil
+                }
+                return RemoteAgentSession(agent: handle.agent, sessionID: handle.sessionID)
+            }
+        }
+        return nil
     }
 
     func attach(

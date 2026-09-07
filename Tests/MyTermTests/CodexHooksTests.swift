@@ -8,7 +8,7 @@ import XCTest
 final class CodexHooksTests: XCTestCase {
     func testCodexGetsItsOwnEventNamesAndReportsAsCodex() throws {
         let url = try makeHooksFile("{}")
-        let controller = AgentHooksController(target: .codex.writing(to: url))
+        let controller = AgentHooksController(target: .codex.withSettingsURL(url))
         controller.install()
         XCTAssertTrue(controller.isInstalled)
 
@@ -33,7 +33,7 @@ final class CodexHooksTests: XCTestCase {
           }
         }
         """)
-        let controller = AgentHooksController(target: .codex.writing(to: url))
+        let controller = AgentHooksController(target: .codex.withSettingsURL(url))
         controller.install()
 
         var commands = try allCommands(at: url, event: "Stop")

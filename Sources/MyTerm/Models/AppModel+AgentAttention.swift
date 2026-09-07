@@ -31,8 +31,11 @@ extension AppModel {
             tabGroupID: tabGroupID,
             tabID: tabID
         )
-        // Setting nil removes the entry, which is how a read tab loses its cook.
-        agentAttention[tabID] = isInFrontOfUser ? report.activity.afterReading : report.activity
+        // Setting nil removes the entry, which is how a read tab loses its cook. A session that
+        // only started, or has ended, has no cook to show and clears the tab the same way.
+        agentAttention[tabID] = report.activity.showsCook
+            ? (isInFrontOfUser ? report.activity.afterReading : report.activity)
+            : nil
         broadcastAgentActivity(forTab: tabID)
         // A banner is for being away from the app. With MyTerm in front, the cook has already said it.
         guard !isApplicationActive() else { return }
