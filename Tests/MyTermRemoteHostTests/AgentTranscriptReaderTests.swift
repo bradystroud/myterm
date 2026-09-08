@@ -83,6 +83,26 @@ final class AgentTranscriptReaderTests: XCTestCase {
         )
     }
 
+    func testDelegatingToAnotherAgentIsSummarisedByItsDescriptionNotItsBrief() {
+        // The real shape of an Agent call. `prompt` is the whole brief sent to the other agent and
+        // runs to hundreds of words; `description` is the one line a person would recognise.
+        let summary = AgentTranscriptReader.summary(ofToolNamed: "Agent", input: [
+            "description": "Find ASF Audits theme tokens",
+            "prompt": String(repeating: "a very long brief ", count: 50),
+            "subagent_type": "Explore",
+        ])
+        XCTAssertEqual(summary, "Find ASF Audits theme tokens")
+    }
+
+    func testACommandStillOutranksItsOwnDescription() {
+        // What it does beats what it says it does, and reordering for Agent must not cost this.
+        let summary = AgentTranscriptReader.summary(ofToolNamed: "Bash", input: [
+            "command": "rm -rf build",
+            "description": "Clean the build",
+        ])
+        XCTAssertEqual(summary, "rm -rf build")
+    }
+
     func testASummaryFallsBackToTheRenderedInputForAnUnknownTool() {
         let summary = AgentTranscriptReader.summary(ofToolNamed: "Odd", input: ["shape": "square"])
         XCTAssertEqual(summary, "shape: square")
