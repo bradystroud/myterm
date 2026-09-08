@@ -68,6 +68,8 @@ public protocol RemoteClientDelegate: AnyObject {
     func remoteClient(_ client: RemoteClient, didReceive conversation: RemoteAgentConversation)
     /// The entries that arrived after that.
     func remoteClient(_ client: RemoteClient, didReceive entries: RemoteAgentEntries)
+    /// What a pending permission prompt is offering. Empty options mean it has gone.
+    func remoteClient(_ client: RemoteClient, didReceive prompt: RemoteAgentPrompt)
     /// The host refused one request. The connection is still good.
     func remoteClient(_ client: RemoteClient, didRefuse error: RemoteError)
 }
@@ -76,6 +78,7 @@ public extension RemoteClientDelegate {
     func remoteClient(_ client: RemoteClient, didRefuse error: RemoteError) {}
     func remoteClient(_ client: RemoteClient, didReceive conversation: RemoteAgentConversation) {}
     func remoteClient(_ client: RemoteClient, didReceive entries: RemoteAgentEntries) {}
+    func remoteClient(_ client: RemoteClient, didReceive prompt: RemoteAgentPrompt) {}
 }
 
 /// The device end of a MyTerm Remote connection.
@@ -215,6 +218,21 @@ public final class RemoteClient {
 
     public func detachAgent(tabID: String) {
         send(.detachAgent(RemoteAttachAgent(tabID: tabID)))
+    }
+
+    /// Says something to the agent. Text only: the host adds the Return and refuses control bytes.
+    public func replyToAgent(tabID: String, text: String) {
+        send(.agentReply(RemoteAgentReply(tabID: tabID, text: text)))
+    }
+
+    /// Takes the whole option, label and all, because the host checks the label is still on that
+    /// number before it sends a keystroke.
+    public func answerAgentPrompt(tabID: String, option: RemoteAgentPromptOption) {
+        send(.agentAnswer(RemoteAgentAnswer(tabID: tabID, isDeny: false, option: option)))
+    }
+
+    public func denyAgentPrompt(tabID: String) {
+        send(.agentAnswer(RemoteAgentAnswer(tabID: tabID, isDeny: true)))
     }
 
     public func sendInput(_ bytes: [UInt8], to session: UUID) {
@@ -497,7 +515,9 @@ public final class RemoteClient {
             delegate?.remoteClient(self, didReceive: conversation)
         case .agentEntries(let entries):
             delegate?.remoteClient(self, didReceive: entries)
-        case .hello, .attach, .detach, .attachAgent, .detachAgent,
+        case .agentPrompt(let prompt):
+            delegate?.remoteClient(self, didReceive: prompt)
+        case .hello, .attach, .detach, .attachAgent, .detachAgent, .agentReply, .agentAnswer,
              .renameTab, .closeTab, .renameWorkspace, .createWorkspace, .deleteWorkspace,
              .createTerminalTab:
             break

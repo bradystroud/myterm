@@ -166,10 +166,23 @@ public final class RemoteHostService {
         let timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.broadcastTreeIfChanged()
+                self?.pushAgentPrompts()
             }
         }
         RunLoop.main.add(timer, forMode: .common)
         treeWatch = timer
+    }
+
+    /// Tells each device what the tabs it is following are asking, when that has changed.
+    ///
+    /// Polled with the tree rather than pushed, because a permission prompt is drawn on the screen
+    /// and nothing in the app announces it. A device learns about it the same second the Mac does.
+    private func pushAgentPrompts() {
+        for connection in connections.values {
+            for tabID in connection.followedAgentTabs {
+                connection.pushPrompt(tabID: tabID)
+            }
+        }
     }
 
     private func stopWatchingTree() {

@@ -127,6 +127,23 @@ private final class DemoDataSource: RemoteHostDataSource {
         Self.demoAgentSession(forTab: tabID)
     }
 
+    func sendInput(tabID: String, bytes: ArraySlice<UInt8>) -> Bool {
+        guard let entry = tabs.first(where: { $0.id == tabID }),
+              let session = sessions[entry.session] else {
+            return false
+        }
+        session.sendInput(bytes)
+        return true
+    }
+
+    func visibleRows(tabID: String) -> [String]? {
+        guard let entry = tabs.first(where: { $0.id == tabID }),
+              let session = sessions[entry.session] else {
+            return nil
+        }
+        return session.visibleRows()
+    }
+
     func snapshot(session: UUID) -> RemoteAttachment? {
         guard let live = sessions[session] else { return nil }
         return attachment(for: session, session: live)

@@ -78,9 +78,23 @@ public protocol RemoteHostDataSource: AnyObject {
     func deleteWorkspace(workspaceID: String) -> Bool
 
     func createTerminalTab(workspaceID: String) -> Bool
-}
 
+    /// Types into a tab's terminal without the device holding an attachment.
+    ///
+    /// Following a conversation is not attaching, so answering one cannot require it either.
+    /// Returns whether the tab was found and written to.
+    func sendInput(tabID: String, bytes: ArraySlice<UInt8>) -> Bool
+
+    /// The tab's visible screen as plain rows.
+    ///
+    /// Needed to read the menu an agent draws when it stops for permission. The options are on the
+    /// screen and nowhere else: the agent's own record says a tool was requested, never what the
+    /// person is being offered or which number each choice sits on.
+    func visibleRows(tabID: String) -> [String]?
+}
 
 public extension RemoteHostDataSource {
     func agentSession(tabID: String) -> RemoteAgentSession? { nil }
+    func sendInput(tabID: String, bytes: ArraySlice<UInt8>) -> Bool { false }
+    func visibleRows(tabID: String) -> [String]? { nil }
 }

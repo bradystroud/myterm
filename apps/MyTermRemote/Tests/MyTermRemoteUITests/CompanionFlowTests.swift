@@ -307,3 +307,75 @@ final class CompanionFlowTests: XCTestCase {
         return false
     }
 }
+
+/// Answering an agent from the device, end to end against a live shell.
+///
+/// Skipped unless `MYTERM_REMOTE_DEMO_AGENT_SESSION` pointed the demo host at a transcript, because
+/// without one no tab offers a conversation and there is nothing to answer.
+final class AgentAnsweringTests: XCTestCase {
+    private let environment = ProcessInfo.processInfo.environment
+    private var host: String { environment["MYTERM_REMOTE_HOST"] ?? "localhost" }
+    private var port: String { environment["MYTERM_REMOTE_PORT"] ?? "" }
+    private var token: String { environment["MYTERM_REMOTE_TOKEN"] ?? "demotoken" }
+    private var shotsDirectory: String? { environment["MYTERM_SHOTS_DIR"] }
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        try XCTSkipIf(port.isEmpty, "Set MYTERM_REMOTE_PORT to the port a MyTerm host is listening on.")
+        try XCTSkipIf(
+            environment["MYTERM_REMOTE_AGENT_TAB"] == nil,
+            "Set MYTERM_REMOTE_AGENT_TAB to a tab the host offers a conversation for."
+        )
+    }
+
+    @MainActor
+    func testTypingReachesTheShellAndItsMenuBecomesButtonsTheDeviceCanSafelyPress() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["MYTERM_REMOTE_RESET_STATE"] = "1"
+        app.launchArguments += [
+            "-remote.host", host,
+            "-remote.port", port,
+            "-remote.token", token,
+            "-remote.reconnectsOnLaunch", "YES",
+            "-remote.openTab", try XCTUnwrap(environment["MYTERM_REMOTE_AGENT_TAB"]),
+        ]
+        app.launch()
+
+        let reply = app.textFields["agent.reply"]
+        XCTAssertTrue(reply.waitForExistence(timeout: 25), "an agent tab should offer a reply field")
+
+        // Typed on the phone, this becomes keystrokes in the Mac's shell. The shell then draws
+        // something shaped exactly like a permission prompt, which is what the host reads back.
+        reply.tap()
+        reply.typeText("printf 'Do you want to proceed?\\n 1. Yes\\n 2. Yes, and do not ask again\\n 3. No\\n'")
+        app.buttons["agent.send"].tap()
+
+        XCTAssertTrue(
+            app.otherElements["agent.prompt"].waitForExistence(timeout: 25),
+            "a menu on the Mac's screen should become buttons on the device"
+        )
+        snap("60-permission-buttons")
+
+        XCTAssertTrue(app.buttons["agent.option.1"].exists, "Yes should be offered")
+        XCTAssertTrue(app.buttons["agent.option.3"].exists, "No should be offered")
+        // The one that turns off every later prompt. A device is never offered it, whatever number
+        // it happens to sit on.
+        XCTAssertFalse(
+            app.buttons["agent.option.2"].exists,
+            "\"do not ask again\" must never reach a device"
+        )
+        XCTAssertTrue(app.buttons["agent.deny"].exists, "cancelling is always offered")
+    }
+
+    @MainActor
+    private func snap(_ name: String) {
+        let screenshot = XCUIScreen.main.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        guard let shotsDirectory else { return }
+        let url = URL(fileURLWithPath: shotsDirectory).appendingPathComponent("\(name).png")
+        try? screenshot.pngRepresentation.write(to: url)
+    }
+}

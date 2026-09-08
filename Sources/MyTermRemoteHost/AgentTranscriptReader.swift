@@ -217,8 +217,31 @@ public struct AgentTranscriptReader {
             id: id,
             name: name,
             summary: summary(ofToolNamed: name, input: input),
-            detail: cut(detail(of: input), to: RemoteAgentLimits.maximumDetailCharacters).text
+            detail: cut(detail(of: input), to: RemoteAgentLimits.maximumDetailCharacters).text,
+            teammate: teammate(ofToolNamed: name, input: input)
         )
+    }
+
+    /// Whether this call hands work to another agent, and to whom.
+    ///
+    /// Named tools rather than a guess: a call that merely mentions an agent is not a handover, and
+    /// showing a teammate where there is none would be worse than showing none at all.
+    static func teammate(ofToolNamed name: String, input: [String: Any]) -> RemoteAgentTeammate? {
+        switch name {
+        case "Agent", "Task":
+            return RemoteAgentTeammate(
+                kind: .delegated,
+                role: nonEmpty(input["subagent_type"] as? String)
+                    ?? nonEmpty(input["name"] as? String)
+            )
+        case "SendMessage":
+            return RemoteAgentTeammate(
+                kind: .message,
+                addressee: nonEmpty(input["to"] as? String)
+            )
+        default:
+            return nil
+        }
     }
 
     /// The one line a collapsed row shows.
@@ -231,7 +254,7 @@ public struct AgentTranscriptReader {
         // work carries both: a one-line description a person wrote, and the whole brief sent to the
         // other agent. Reading the brief first fills the row with a wall of text and buries what
         // the call was for.
-        let subjectKeys = ["command", "file_path", "path", "pattern", "url", "description", "prompt"]
+        let subjectKeys = ["command", "file_path", "path", "pattern", "url", "description", "message", "prompt"]
         for key in subjectKeys {
             if let value = nonEmpty(input[key] as? String) {
                 return cut(value.replacingOccurrences(of: "\n", with: " "),

@@ -185,6 +185,10 @@ public final class SwiftTermTerminalSession: NSObject, TerminalProcessSession {
         TerminalGridSerializer.snapshot(of: terminal.getTerminal())
     }
 
+    public func visibleRows() -> [String]? {
+        TerminalGridSerializer.plainRows(of: terminal.getTerminal())
+    }
+
     private func emitTermination(exitCode: Int32?) {
         guard !didTerminate else { return }
         didTerminate = true

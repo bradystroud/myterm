@@ -30,6 +30,25 @@ extension AppModel: RemoteHostDataSource {
         nil
     }
 
+    /// Types into a tab without the device holding an attachment.
+    func sendInput(tabID: String, bytes: ArraySlice<UInt8>) -> Bool {
+        guard let sessionID = terminalSessionID(forRemoteTab: tabID),
+              let session = terminalSessions[sessionID] else {
+            return false
+        }
+        session.sendInput(bytes)
+        return true
+    }
+
+    /// The tab's visible screen as plain rows, for reading a menu the agent is drawing.
+    func visibleRows(tabID: String) -> [String]? {
+        guard let sessionID = terminalSessionID(forRemoteTab: tabID),
+              let session = terminalSessions[sessionID] else {
+            return nil
+        }
+        return session.visibleRows()
+    }
+
     func attach(
         tabID: String,
         output: @escaping @MainActor (ArraySlice<UInt8>) -> Void
