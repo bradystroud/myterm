@@ -227,7 +227,11 @@ public struct AgentTranscriptReader {
     /// about whether it is about to read a file or remove one. These are the keys the agents in use
     /// actually put the subject in; anything else falls back to the rendered input.
     static func summary(ofToolNamed name: String, input: [String: Any]) -> String {
-        let subjectKeys = ["command", "file_path", "path", "pattern", "url", "prompt", "description"]
+        // `description` outranks `prompt`, and `prompt` comes last of all. A tool that delegates
+        // work carries both: a one-line description a person wrote, and the whole brief sent to the
+        // other agent. Reading the brief first fills the row with a wall of text and buries what
+        // the call was for.
+        let subjectKeys = ["command", "file_path", "path", "pattern", "url", "description", "prompt"]
         for key in subjectKeys {
             if let value = nonEmpty(input[key] as? String) {
                 return cut(value.replacingOccurrences(of: "\n", with: " "),
