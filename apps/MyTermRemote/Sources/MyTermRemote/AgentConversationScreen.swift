@@ -169,6 +169,7 @@ private struct AgentToolUseView: View {
                 Text(use.detail)
                     .font(.system(.footnote, design: .monospaced))
                     .textSelection(.enabled)
+                    .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 4)
             } label: {
@@ -182,6 +183,10 @@ private struct AgentToolUseView: View {
                         Text(use.summary)
                             .font(.system(.footnote, design: .monospaced))
                             .foregroundStyle(.secondary)
+                            // A command that wraps must stay left aligned. Centred, the second line
+                            // of a command reads as something nobody would ever type.
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .lineLimit(2)
                     }
                 }
@@ -216,6 +221,7 @@ private struct AgentToolResultView: View {
                 Text(result.text)
                     .font(.system(.footnote, design: .monospaced))
                     .textSelection(.enabled)
+                    .multilineTextAlignment(.leading)
                 if result.isTruncated {
                     Text("Cut to fit. The whole output is on your Mac.")
                         .font(.caption2)
