@@ -45,6 +45,12 @@ public enum RemoteControlMessage: Codable, Equatable, Sendable {
     case agentEntries(RemoteAgentEntries)
     /// Device to host, stopping the follow.
     case detachAgent(RemoteAttachAgent)
+    /// Device to host, saying something to the agent.
+    case agentReply(RemoteAgentReply)
+    /// Host to device, the choices a pending permission prompt is offering.
+    case agentPrompt(RemoteAgentPrompt)
+    /// Device to host, answering that prompt.
+    case agentAnswer(RemoteAgentAnswer)
 
     // Device to host. Each names the one thing it does, so the host can decide per intent what a
     // device may ask for. A single "apply this change" message would make that decision impossible
@@ -64,12 +70,14 @@ public enum RemoteControlMessage: Codable, Equatable, Sendable {
         case hello, welcome, tree, attach, attached, detach, resync, agentActivity, error
         case renameTab, closeTab, renameWorkspace, createWorkspace, deleteWorkspace, createTerminalTab
         case attachAgent, agentConversation, agentEntries, detachAgent
+        case agentReply, agentPrompt, agentAnswer
     }
 
     private enum Kind: String, Codable {
         case hello, welcome, tree, attach, attached, detach, resync, agentActivity, error
         case renameTab, closeTab, renameWorkspace, createWorkspace, deleteWorkspace, createTerminalTab
         case attachAgent, agentConversation, agentEntries, detachAgent
+        case agentReply, agentPrompt, agentAnswer
     }
 
     public init(from decoder: Decoder) throws {
@@ -102,6 +110,12 @@ public enum RemoteControlMessage: Codable, Equatable, Sendable {
             self = .agentEntries(try container.decode(RemoteAgentEntries.self, forKey: .agentEntries))
         case .detachAgent:
             self = .detachAgent(try container.decode(RemoteAttachAgent.self, forKey: .detachAgent))
+        case .agentReply:
+            self = .agentReply(try container.decode(RemoteAgentReply.self, forKey: .agentReply))
+        case .agentPrompt:
+            self = .agentPrompt(try container.decode(RemoteAgentPrompt.self, forKey: .agentPrompt))
+        case .agentAnswer:
+            self = .agentAnswer(try container.decode(RemoteAgentAnswer.self, forKey: .agentAnswer))
         case .error: self = .error(try container.decode(RemoteError.self, forKey: .error))
         }
     }
@@ -163,6 +177,15 @@ public enum RemoteControlMessage: Codable, Equatable, Sendable {
         case .detachAgent(let value):
             try container.encode(Kind.detachAgent, forKey: .type)
             try container.encode(value, forKey: .detachAgent)
+        case .agentReply(let value):
+            try container.encode(Kind.agentReply, forKey: .type)
+            try container.encode(value, forKey: .agentReply)
+        case .agentPrompt(let value):
+            try container.encode(Kind.agentPrompt, forKey: .type)
+            try container.encode(value, forKey: .agentPrompt)
+        case .agentAnswer(let value):
+            try container.encode(Kind.agentAnswer, forKey: .type)
+            try container.encode(value, forKey: .agentAnswer)
         case .error(let value):
             try container.encode(Kind.error, forKey: .type)
             try container.encode(value, forKey: .error)

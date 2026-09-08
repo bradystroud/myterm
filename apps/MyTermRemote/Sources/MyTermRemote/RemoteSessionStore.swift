@@ -22,6 +22,11 @@ final class RemoteSessionStore {
     /// Set while a conversation has been asked for and nothing has come back. The file may not exist
     /// yet, which is normal for the first seconds of an agent session.
     private(set) var isLoadingConversation = false
+    /// What the tab's screen is offering, when the agent has stopped to ask. Empty means there is
+    /// nothing to answer, which is the ordinary case.
+    private(set) var promptOptions: [RemoteAgentPromptOption] = []
+    /// Set while an answer is in flight, so the buttons cannot be pressed twice.
+    private(set) var isAnswering = false
 
     /// Set by whichever `TerminalScreen` is currently attached; cleared when it detaches.
     @ObservationIgnored
@@ -81,6 +86,26 @@ final class RemoteSessionStore {
             conversation = nil
         }
         isLoadingConversation = false
+        promptOptions = []
+        isAnswering = false
+    }
+
+    func reply(tabID: String, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        client.replyToAgent(tabID: tabID, text: trimmed)
+    }
+
+    /// Sends the whole option rather than its number. The Mac checks the label is still on that
+    /// number before it types anything, so a menu that changed answers nothing at all.
+    func answerPrompt(tabID: String, option: RemoteAgentPromptOption) {
+        isAnswering = true
+        client.answerAgentPrompt(tabID: tabID, option: option)
+    }
+
+    func denyPrompt(tabID: String) {
+        isAnswering = true
+        client.denyAgentPrompt(tabID: tabID)
     }
 
     /// Forgets the Mac's tree. For leaving a Mac, not for losing it: a dropped connection keeps the
@@ -89,6 +114,8 @@ final class RemoteSessionStore {
         tree = nil
         conversation = nil
         isLoadingConversation = false
+        promptOptions = []
+        isAnswering = false
     }
 
     func dismissRefusal() {
@@ -137,12 +164,23 @@ extension RemoteSessionStore: RemoteClientDelegate {
         conversation = current
     }
 
+    func remoteClient(_ client: RemoteClient, didReceive prompt: RemoteAgentPrompt) {
+        guard conversation?.tabID == prompt.tabID else { return }
+        promptOptions = prompt.options
+        isAnswering = false
+    }
+
     func remoteClient(_ client: RemoteClient, didRefuse error: RemoteError) {
         // An attach that failed belongs to the screen that asked. Everything else is a passing
         // notice: the tree the Mac sends next already shows what did and did not change.
         if error.code == "attach", attachmentOwner != nil {
             attachRefusal = error.message
             return
+        }
+        if error.code == "agentAnswer" || error.code == "agentReply" {
+            // The banner says what happened. Freeing the buttons matters as much: a refused answer
+            // that left them disabled would look like the Mac had stopped listening.
+            isAnswering = false
         }
         if error.code == "attachAgent" {
             // The tab has no conversation to show. The screen falls back to the terminal rather

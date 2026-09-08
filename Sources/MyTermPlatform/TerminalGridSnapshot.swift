@@ -33,6 +33,27 @@ public enum TerminalGridSerializer {
     ///   gets it back on.
     /// - Cursor visibility. `ESC c` deliberately preserves it in SwiftTerm, so a hidden cursor on
     ///   the Mac stays visible on the device.
+    /// The visible screen as plain rows, with no styling.
+    ///
+    /// This exists for reading a menu an agent is drawing, which is the only way to learn what a
+    /// permission prompt is offering: the options are on the screen and nowhere else. The snapshot
+    /// above cannot serve, because it is escape sequences by design.
+    public static func plainRows(of terminal: Terminal) -> [String] {
+        (0..<terminal.rows).map { row in
+            var text = ""
+            for column in 0..<terminal.cols {
+                let cell = terminal.getCharData(col: column, row: row) ?? CharData.Null
+                // The trailing half of a double-width character owns no glyph of its own.
+                guard cell.width != 0 else { continue }
+                let character = terminal.getCharacter(for: cell)
+                text.append(character == unwritten ? blank : character)
+            }
+            // Trailing blanks are padding, not content, and every row has them.
+            while text.hasSuffix(" ") { text.removeLast() }
+            return text
+        }
+    }
+
     public static func snapshot(of terminal: Terminal) -> TerminalGridSnapshot {
         let columns = terminal.cols
         let rows = terminal.rows

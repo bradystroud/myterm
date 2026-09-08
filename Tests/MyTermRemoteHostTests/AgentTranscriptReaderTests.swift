@@ -170,6 +170,54 @@ final class AgentTranscriptReaderTests: XCTestCase {
         }
     }
 
+    // MARK: - Teammates
+
+    func testDelegatingToAnotherAgentIsMarkedAsATeammateWithItsRole() {
+        let line = """
+        {"type":"assistant","uuid":"a1","message":{"role":"assistant","content":[\
+        {"type":"tool_use","id":"t1","name":"Agent","input":{"description":"Find theme tokens",\
+        "prompt":"a long brief","subagent_type":"Explore"}}]}}
+        """
+        guard case .toolUse(let use)? = reader.entry(from: line)?.blocks.first else {
+            return XCTFail("expected a tool request")
+        }
+        XCTAssertEqual(use.teammate, RemoteAgentTeammate(kind: .delegated, role: "Explore"))
+        XCTAssertEqual(use.summary, "Find theme tokens")
+    }
+
+    func testAMessageToARunningAgentIsMarkedWithWhoItIsFor() {
+        let line = """
+        {"type":"assistant","uuid":"a1","message":{"role":"assistant","content":[\
+        {"type":"tool_use","id":"t1","name":"SendMessage","input":{"to":"reviewer",\
+        "message":"take another look at the migration"}}]}}
+        """
+        guard case .toolUse(let use)? = reader.entry(from: line)?.blocks.first else {
+            return XCTFail("expected a tool request")
+        }
+        XCTAssertEqual(use.teammate, RemoteAgentTeammate(kind: .message, addressee: "reviewer"))
+    }
+
+    func testAMessageIsSummarisedByWhatWasSaid() {
+        // Not by the rendered input, which repeats the addressee the card already names.
+        let summary = AgentTranscriptReader.summary(ofToolNamed: "SendMessage", input: [
+            "to": "reviewer",
+            "message": "Two queries endpoints still use the legacy path. Is that deliberate?",
+        ])
+        XCTAssertEqual(summary, "Two queries endpoints still use the legacy path. Is that deliberate?")
+    }
+
+    func testAnOrdinaryToolIsNotATeammate() {
+        // A wrench for Bash and a teammate for Agent. Showing a teammate where there is none would
+        // be worse than showing none at all.
+        XCTAssertNil(AgentTranscriptReader.teammate(ofToolNamed: "Bash", input: ["command": "ls"]))
+        XCTAssertNil(AgentTranscriptReader.teammate(ofToolNamed: "Read", input: ["file_path": "/a"]))
+    }
+
+    func testADelegationWithNoNamedRoleIsStillATeammate() {
+        let teammate = AgentTranscriptReader.teammate(ofToolNamed: "Agent", input: ["prompt": "go"])
+        XCTAssertEqual(teammate, RemoteAgentTeammate(kind: .delegated, role: nil))
+    }
+
     // MARK: - Caps
 
     func testALongResultIsCutAndSaysSo() {

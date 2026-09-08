@@ -15,6 +15,8 @@ struct AgentConversationScreen: View {
     let store: RemoteSessionStore
 
     @State private var isShowingTerminal = false
+    @State private var draft = ""
+    @FocusState private var isWritingReply: Bool
 
     var body: some View {
         Group {
@@ -22,6 +24,7 @@ struct AgentConversationScreen: View {
                 TerminalScreen(tab: tab, store: store)
             } else {
                 conversation
+                    .safeAreaInset(edge: .bottom, spacing: 0) { composer }
             }
         }
         .toolbar {
@@ -87,7 +90,181 @@ struct AgentConversationScreen: View {
         }
     }
 
+    /// What the person can send: either an answer to a question the agent is stopped on, or words.
+    ///
+    /// The two are never offered together. While an agent is waiting on a permission prompt it is
+    /// not reading a reply, so a text field there would take something that goes nowhere.
+    @ViewBuilder
+    private var composer: some View {
+        if !store.client.allowsMutation {
+            Label("View only. Typing is turned off on the Mac.", systemImage: "eye")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(.bar)
+                .accessibilityIdentifier("agent.viewOnly")
+        } else if !store.promptOptions.isEmpty {
+            AgentPromptBar(tab: tab, store: store)
+        } else {
+            AgentReplyBar(tab: tab, store: store, draft: $draft, isWriting: $isWritingReply)
+        }
+    }
+
     private static let bottomAnchor = "conversation.bottom"
+}
+
+/// Work the agent handed to another agent.
+///
+/// This is not another tool call and should not read as one. It is the agent bringing somebody in,
+/// and the honest thing to say is that the work happened somewhere this screen cannot follow: a
+/// teammate's own turns are not in this conversation's record, only the handover and the report.
+private struct AgentTeammateView: View {
+    let use: RemoteAgentToolUse
+    let teammate: RemoteAgentTeammate
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            DisclosureGroup(isExpanded: $isExpanded) {
+                Text(use.detail)
+                    .font(.footnote)
+                    .textSelection(.enabled)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: icon)
+                        .font(.caption)
+                        .foregroundStyle(.purple)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(heading)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.purple)
+                        Text(use.summary)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .lineLimit(3)
+                    }
+                }
+            }
+
+            if use.isPending {
+                Label("Still working", systemImage: "ellipsis.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .background(Color.purple.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var icon: String {
+        teammate.kind == .delegated ? "person.badge.plus" : "paperplane"
+    }
+
+    /// Names the teammate where the call named one. "Explore" says far more than "Agent" does.
+    private var heading: String {
+        switch teammate.kind {
+        case .delegated:
+            guard let role = teammate.role else { return "Handed to a teammate" }
+            return "Handed to \(role)"
+        case .message:
+            guard let addressee = teammate.addressee else { return "Message to a teammate" }
+            return "Message to \(addressee)"
+        }
+    }
+}
+
+/// The answer to a question the agent has stopped on.
+///
+/// Every button here names a choice the Mac read off its own screen a moment ago. Tapping one sends
+/// the label back, and the Mac only types a digit if that label is still sitting on that number, so
+/// a menu that moved under the person answers nothing at all.
+private struct AgentPromptBar: View {
+    let tab: RemoteTab
+    let store: RemoteSessionStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Your agent is waiting on this", systemImage: "hand.raised.fill")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.orange)
+
+            ForEach(store.promptOptions) { option in
+                Button {
+                    store.answerPrompt(tabID: tab.id, option: option)
+                } label: {
+                    Text(option.label)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(.leading)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("agent.option.\(option.number)")
+            }
+
+            // Always offered, and never one of the numbered choices. Cancelling is the one answer
+            // that means the same thing whatever the menu holds.
+            Button(role: .destructive) {
+                store.denyPrompt(tabID: tab.id)
+            } label: {
+                Text("Don\u{2019}t allow")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("agent.deny")
+        }
+        .disabled(store.isAnswering)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+        // Grouped, so VoiceOver reads the question and its choices as one thing rather than as
+        // loose buttons, and so the identifier names a container that can actually be found.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("agent.prompt")
+    }
+}
+
+/// Saying something to the agent.
+private struct AgentReplyBar: View {
+    let tab: RemoteTab
+    let store: RemoteSessionStore
+    @Binding var draft: String
+    @FocusState.Binding var isWriting: Bool
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            // Grows with what is written, up to a point: a phone reply is often a sentence, and a
+            // single line hides most of it.
+            TextField("Reply to your agent", text: $draft, axis: .vertical)
+                .lineLimit(1...5)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))
+                .focused($isWriting)
+                .accessibilityIdentifier("agent.reply")
+
+            Button {
+                store.reply(tabID: tab.id, text: draft)
+                draft = ""
+                isWriting = false
+            } label: {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.title2)
+            }
+            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityIdentifier("agent.send")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+    }
 }
 
 private struct AgentEntryView: View {
@@ -102,7 +279,11 @@ private struct AgentEntryView: View {
                 case .thinking(let text):
                     AgentThinkingView(text: text)
                 case .toolUse(let use):
-                    AgentToolUseView(use: use)
+                    if let teammate = use.teammate {
+                        AgentTeammateView(use: use, teammate: teammate)
+                    } else {
+                        AgentToolUseView(use: use)
+                    }
                 case .toolResult(let result):
                     AgentToolResultView(result: result)
                 case .image:

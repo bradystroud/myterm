@@ -32,6 +32,9 @@ final class RemoteHostConnection {
     /// One watcher per followed conversation. Held here so they die with the connection: a watcher
     /// that outlived its device would keep reading a file for nobody.
     private var agentWatchers: [String: AgentTranscriptWatcher] = [:]
+    /// What was last sent to the device for each followed tab, so the same prompt is not pushed
+    /// again on every poll.
+    private var agentPromptOptions: [String: [RemoteAgentPromptOption]] = [:]
     private var pendingBytes = 0
     private var sessionsNeedingResync = Set<UUID>()
 
@@ -244,6 +247,32 @@ final class RemoteHostConnection {
 
         case .detachAgent(let request):
             agentWatchers.removeValue(forKey: request.tabID)?.stop()
+            agentPromptOptions.removeValue(forKey: request.tabID)
+
+        case .agentReply(let request):
+            // Typing into an agent reaches as far as typing into its terminal does, so it is gated
+            // on the same answer the user gave about whether their devices may type at all.
+            guard didGreet, allowsInput() else {
+                sendControl(.error(RemoteError(code: "denied", message: "is not taking input from devices")))
+                return
+            }
+            guard request.isTypable else {
+                sendControl(.error(RemoteError(code: "agentReply", message: "would not accept that text")))
+                return
+            }
+            // The Return is added here, not sent by the device. A device says words; it does not
+            // decide when a line is submitted, and it cannot smuggle control bytes through this.
+            let bytes = Array(request.text.utf8) + Array("\r".utf8)
+            if dataSource?.sendInput(tabID: request.tabID, bytes: bytes[...]) != true {
+                sendControl(.error(RemoteError(code: "agentReply", message: "has no terminal for that tab")))
+            }
+
+        case .agentAnswer(let request):
+            guard didGreet, allowsInput() else {
+                sendControl(.error(RemoteError(code: "denied", message: "is not taking input from devices")))
+                return
+            }
+            answer(request)
 
         case .renameTab(let request):
             applyMutation("rename tab") { $0.renameTab(tabID: request.tabID, title: request.title) }
@@ -270,11 +299,57 @@ final class RemoteHostConnection {
             }
 
         case .welcome, .tree, .attached, .resync, .agentActivity,
-             .agentConversation, .agentEntries, .error:
+             .agentConversation, .agentEntries, .agentPrompt, .error:
             // The host never receives these.
             break
         }
     }
+
+    /// Answers a permission prompt, or refuses to.
+    ///
+    /// The screen is read again here rather than trusted from when it was offered. A menu's
+    /// composition varies between runs, so a number that meant "No" a moment ago can mean "Yes, and
+    /// switch to auto mode" now. Only a label still sitting on its own number is answered.
+    private func answer(_ request: RemoteAgentAnswer) {
+        if request.isDeny {
+            // Escape needs no menu read. It is what the prompt's own footer offers and it means the
+            // same thing wherever the options sit, which makes it the one safe blind answer.
+            if dataSource?.sendInput(
+                tabID: request.tabID,
+                bytes: AgentPermissionMenu.denyKeystrokes[...]
+            ) != true {
+                sendControl(.error(RemoteError(code: "agentAnswer", message: "has no terminal for that tab")))
+            }
+            return
+        }
+
+        guard let option = request.option,
+              let rows = dataSource?.visibleRows(tabID: request.tabID),
+              let keystrokes = AgentPermissionMenu.keystrokes(forAnswering: option, rows: rows) else {
+            // Saying so matters: the person pressed a button and nothing happened, and the reason
+            // is that what they were looking at is no longer what the Mac is showing.
+            sendControl(.error(RemoteError(
+                code: "agentAnswer",
+                message: "is showing something else now, so that answer was not sent"
+            )))
+            pushPrompt(tabID: request.tabID, force: true)
+            return
+        }
+        _ = dataSource?.sendInput(tabID: request.tabID, bytes: keystrokes[...])
+        pushPrompt(tabID: request.tabID, force: true)
+    }
+
+    /// Tells the device what the tab's screen is offering, when that has changed.
+    func pushPrompt(tabID: String, force: Bool = false) {
+        guard didGreet, agentWatchers[tabID] != nil else { return }
+        let options = dataSource.map { AgentPermissionMenu.offerableOptions(rows: $0.visibleRows(tabID: tabID) ?? []) } ?? []
+        guard force || options != agentPromptOptions[tabID] else { return }
+        agentPromptOptions[tabID] = options
+        sendControl(.agentPrompt(RemoteAgentPrompt(tabID: tabID, options: options)))
+    }
+
+    /// Every tab whose conversation this connection is following.
+    var followedAgentTabs: [String] { Array(agentWatchers.keys) }
 
     /// Runs one change a device asked for, and refuses it outright unless this Mac accepts input.
     ///

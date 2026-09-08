@@ -30,6 +30,9 @@ public protocol TerminalProcessSession: AnyObject {
     func sendInput(_ bytes: ArraySlice<UInt8>)
     /// The screen as it stands, for a viewer that joined after the output that drew it.
     func gridSnapshot() -> TerminalGridSnapshot?
+
+    /// The visible screen as plain rows, for reading a menu a program is drawing.
+    func visibleRows() -> [String]?
 }
 
 public extension TerminalProcessSession {
@@ -48,6 +51,8 @@ public extension TerminalProcessSession {
     func sendInput(_ bytes: ArraySlice<UInt8>) {}
 
     func gridSnapshot() -> TerminalGridSnapshot? { nil }
+
+    func visibleRows() -> [String]? { nil }
 }
 
 public struct TerminalColor: Equatable, Sendable {

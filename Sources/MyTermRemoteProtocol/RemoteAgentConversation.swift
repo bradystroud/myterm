@@ -84,13 +84,50 @@ public struct RemoteAgentToolUse: Codable, Equatable, Sendable {
     /// True when the agent asked for this and nothing has answered yet. A pending request is the
     /// whole reason someone opens this screen away from the desk.
     public var isPending: Bool
+    /// Set when the call hands work to another agent, so the device can show a teammate rather than
+    /// another wrench among the file reads.
+    public var teammate: RemoteAgentTeammate?
 
-    public init(id: String, name: String, summary: String, detail: String, isPending: Bool = false) {
+    public init(
+        id: String,
+        name: String,
+        summary: String,
+        detail: String,
+        isPending: Bool = false,
+        teammate: RemoteAgentTeammate? = nil
+    ) {
         self.id = id
         self.name = name
         self.summary = summary
         self.detail = detail
         self.isPending = isPending
+        self.teammate = teammate
+    }
+}
+
+/// Work handed to another agent.
+///
+/// A teammate's own turns are not in this conversation's record: only the handover and whatever
+/// came back. So this says who was asked and what for, and the device says plainly that the work
+/// itself happened somewhere the phone cannot see.
+public struct RemoteAgentTeammate: Codable, Equatable, Sendable {
+    public enum Kind: String, Codable, Equatable, Sendable {
+        /// Work handed to a new agent.
+        case delegated
+        /// A message to an agent already running.
+        case message
+    }
+
+    public var kind: Kind
+    /// The kind of agent asked, when the call names one.
+    public var role: String?
+    /// The agent addressed, for a message to one already running.
+    public var addressee: String?
+
+    public init(kind: Kind, role: String? = nil, addressee: String? = nil) {
+        self.kind = kind
+        self.role = role
+        self.addressee = addressee
     }
 }
 
@@ -181,4 +218,77 @@ public enum RemoteAgentLimits {
     /// The whole backlog sent on attach. Older entries are dropped from the front, and the
     /// conversation is marked truncated.
     public static let maximumBacklogCharacters = 200_000
+}
+
+// MARK: - Answering the agent
+
+/// Text a device wants typed into an agent's tab.
+///
+/// Text, never bytes. The host appends the Return itself and refuses anything with control
+/// characters in it, so a device can say something to an agent and cannot drive its terminal.
+public struct RemoteAgentReply: Codable, Equatable, Sendable {
+    public var tabID: String
+    public var text: String
+
+    public init(tabID: String, text: String) {
+        self.tabID = tabID
+        self.text = text
+    }
+
+    /// The most a person types into a phone in one go. A cap belongs here because this becomes
+    /// keystrokes on someone's Mac.
+    public static let maximumCharacters = 4_000
+
+    /// Whether this is safe to type.
+    ///
+    /// Newlines included: a reply carrying its own Return would submit lines the person never saw
+    /// as one message, and an escape would drive the agent's interface rather than talk to it.
+    public var isTypable: Bool {
+        !text.isEmpty
+            && text.count <= Self.maximumCharacters
+            && !text.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+    }
+}
+
+/// One choice a pending permission prompt is offering, as the host read it off the screen.
+public struct RemoteAgentPromptOption: Codable, Equatable, Sendable, Identifiable {
+    public var number: Int
+    public var label: String
+
+    public var id: Int { number }
+
+    public init(number: Int, label: String) {
+        self.number = number
+        self.label = label
+    }
+}
+
+/// What an agent is waiting to be told, pushed when the host sees a prompt on the tab's screen.
+public struct RemoteAgentPrompt: Codable, Equatable, Sendable {
+    public var tabID: String
+    /// Empty means the prompt has gone: either it was answered, or the host can no longer read it
+    /// well enough to offer anything. The device stops offering buttons in both cases.
+    public var options: [RemoteAgentPromptOption]
+
+    public init(tabID: String, options: [RemoteAgentPromptOption]) {
+        self.tabID = tabID
+        self.options = options
+    }
+}
+
+/// A device answering that prompt.
+///
+/// The chosen option travels whole, label and all, because the host verifies the label still sits
+/// on that number before it sends a single keystroke. A bare number would be unanswerable safely.
+public struct RemoteAgentAnswer: Codable, Equatable, Sendable {
+    public var tabID: String
+    /// Cancelling. It needs no option, because Escape means the same thing whatever the menu holds.
+    public var isDeny: Bool
+    public var option: RemoteAgentPromptOption?
+
+    public init(tabID: String, isDeny: Bool, option: RemoteAgentPromptOption? = nil) {
+        self.tabID = tabID
+        self.isDeny = isDeny
+        self.option = option
+    }
 }
