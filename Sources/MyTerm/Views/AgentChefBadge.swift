@@ -23,7 +23,7 @@ struct AgentChefBadge: View {
             .blue
         case .awaitingInput:
             .purple
-        case .working:
+        case .working, .ready, .exited:
             .secondary
         }
     }

@@ -93,7 +93,7 @@ public enum AgentNotificationBuilder {
     /// A working agent has nothing to announce. It is the finish, or the question, that interrupts.
     private static func body(for report: AgentActivityReport) -> String? {
         switch report.activity {
-        case .working:
+        case .working, .ready, .exited:
             nil
         case .finished:
             "\(agentName(report.agent)) finished its turn."

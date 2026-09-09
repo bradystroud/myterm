@@ -33,6 +33,7 @@ final class KeyChordReservationTests: XCTestCase {
             ("closeWorkspace", "W"),
             ("newBrowserTab", "L"),
             ("splitBelow", "D"),
+            ("showNotifications", "I"),
         ]
         for (name, uppercaseCharacter) in shiftedLetterCommands {
             let event = try keyDown(characters: uppercaseCharacter, modifiers: [.command, .shift])

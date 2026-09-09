@@ -20,6 +20,80 @@ enum SidebarDragItem: Codable, Equatable, Sendable, Transferable {
     }
 }
 
+/// What a sidebar row draws while a drag hovers over it. `.highlight` means the drop lands inside
+/// the row, `.insertion` means it lands beside the row on that edge.
+enum SidebarDropFeedback: Equatable {
+    case none
+    case highlight
+    case insertion(SidebarDropCalculations.InsertionEdge)
+
+    var insertionEdge: SidebarDropCalculations.InsertionEdge? {
+        guard case .insertion(let edge) = self else { return nil }
+        return edge
+    }
+
+    var isHighlighted: Bool { self == .highlight }
+}
+
+/// Rows resolve their own drop feedback because `dropDestination` only reports whether a row is
+/// targeted, never where the pointer sits inside it. `DropInfo.location` in `dropUpdated` is what
+/// lets the insertion line follow the pointer between the upper and lower halves of a row.
+struct SidebarRowDropDelegate: DropDelegate {
+    let feedback: (CGPoint) -> SidebarDropFeedback
+    let commit: (CGPoint) -> Bool
+    @Binding var current: SidebarDropFeedback
+
+    func validateDrop(info: DropInfo) -> Bool {
+        // A refusal here rejects the row for the rest of the drag, so accept on the payload type
+        // and leave every position decision to `dropUpdated`. An in-flight sidebar drag that the
+        // pasteboard does not report is still accepted, because resolved feedback proves it.
+        info.hasItemsConforming(to: [.mytermSidebarItem]) || feedback(info.location) != .none
+    }
+
+    func dropEntered(info: DropInfo) {
+        update(at: info.location)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        let next = update(at: info.location)
+        return DropProposal(operation: next == .none ? .forbidden : .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        update(to: .none)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        update(to: .none)
+        return commit(info.location)
+    }
+
+    @discardableResult
+    private func update(at location: CGPoint) -> SidebarDropFeedback {
+        let next = feedback(location)
+        update(to: next)
+        return next
+    }
+
+    private func update(to next: SidebarDropFeedback) {
+        if current != next { current = next }
+    }
+}
+
+/// The line a row draws on the edge where a dragged item will land.
+struct SidebarInsertionLine: View {
+    let leadingInset: CGFloat
+
+    var body: some View {
+        Capsule()
+            .fill(Color.accentColor)
+            .frame(height: 2)
+            .padding(.leading, leadingInset)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
 enum SidebarVisibleRow: Hashable, Identifiable {
     enum ID: Hashable {
         case folder(WorkspaceFolderID)
@@ -78,11 +152,10 @@ enum SidebarDropCalculations {
     }
 
     /// Relationship-only acceptance (no pointer position involved): true whenever `source` can
-    /// land somewhere in `target`'s row.
+    /// land somewhere in `target`'s row. A row always speaks for its own folder and pinned band,
+    /// so accepting a source from elsewhere is what lets a drop both refile and repin it.
     static func workspaceRowAcceptsSource(source: Workspace, target: Workspace) -> Bool {
         source.id != target.id
-            && source.folderID == target.folderID
-            && source.isPinned == target.isPinned
     }
 
     static func workspaceRowDrop(
@@ -151,16 +224,67 @@ enum SidebarDropCalculations {
         }
     }
 
-    static func workspaceRowAcceptsDragItem(
+    /// What a workspace row should draw for the drag currently over it.
+    static func workspaceRowFeedback(
         _ item: SidebarDragItem?,
         target: Workspace,
+        locationY: CGFloat,
+        renderedHeight: CGFloat,
         in workspaces: [Workspace]
-    ) -> Bool {
+    ) -> SidebarDropFeedback {
         guard case .workspace(let sourceID) = item,
               let source = workspaces.first(where: { $0.id == sourceID }) else {
-            return false
+            return .none
         }
-        return workspaceRowAcceptsSource(source: source, target: target)
+        switch workspaceRowDrop(
+            source: source,
+            target: target,
+            locationY: locationY,
+            renderedHeight: renderedHeight,
+            in: workspaces
+        ) {
+        case .rejected:
+            return .none
+        case .insert(_, let edge):
+            return .insertion(edge)
+        }
+    }
+
+    /// What a folder row should draw for the drag currently over it. A workspace lands inside the
+    /// folder, so the row highlights. Another folder lands beside it, so the row shows an edge.
+    static func folderRowFeedback(
+        _ item: SidebarDragItem?,
+        folderID: WorkspaceFolderID,
+        nextFolderID: WorkspaceFolderID?,
+        locationY: CGFloat,
+        renderedHeight: CGFloat,
+        workspaces: [Workspace],
+        folders: [WorkspaceFolder]
+    ) -> SidebarDropFeedback {
+        switch item {
+        case .workspace(let sourceID):
+            guard let source = workspaces.first(where: { $0.id == sourceID }),
+                  containerAcceptsWorkspace(source: source, folderID: folderID) else {
+                return .none
+            }
+            return .highlight
+        case .folder(let sourceID):
+            switch folderRowDrop(
+                sourceID: sourceID,
+                folderID: folderID,
+                nextFolderID: nextFolderID,
+                locationY: locationY,
+                renderedHeight: renderedHeight,
+                in: folders
+            ) {
+            case .rejected:
+                return .none
+            case .insert(_, let edge):
+                return .insertion(edge)
+            }
+        case nil:
+            return .none
+        }
     }
 
     enum FolderRowDrop: Equatable {

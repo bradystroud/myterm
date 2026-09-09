@@ -145,7 +145,7 @@ final class InteractionBehaviorTests: XCTestCase {
         )
     }
 
-    func testWorkspaceRowDropRejectsCrossFolderDrops() {
+    func testWorkspaceRowDropAcceptsCrossFolderDrops() {
         let folderA = WorkspaceFolderID()
         let folderB = WorkspaceFolderID()
         let source = Workspace(title: "In A", folderID: folderA)
@@ -159,11 +159,11 @@ final class InteractionBehaviorTests: XCTestCase {
                 renderedHeight: 40,
                 in: [source, target]
             ),
-            .rejected
+            .insert(before: target.id, edge: .top)
         )
     }
 
-    func testWorkspaceRowDropRejectsCrossFolderDropsAgainstUnfiled() {
+    func testWorkspaceRowDropAcceptsCrossFolderDropsAgainstUnfiled() {
         let folderA = WorkspaceFolderID()
         let source = Workspace(title: "In A", folderID: folderA)
         let target = Workspace(title: "Unfiled", folderID: nil)
@@ -176,11 +176,11 @@ final class InteractionBehaviorTests: XCTestCase {
                 renderedHeight: 40,
                 in: [source, target]
             ),
-            .rejected
+            .insert(before: target.id, edge: .top)
         )
     }
 
-    func testWorkspaceRowDropRejectsAcrossPinnedBand() {
+    func testWorkspaceRowDropAcceptsDropsAcrossThePinnedBand() {
         let folderID = WorkspaceFolderID()
         let source = Workspace(title: "Pinned", folderID: folderID, isPinned: true)
         let target = Workspace(title: "Unpinned", folderID: folderID, isPinned: false)
@@ -193,7 +193,7 @@ final class InteractionBehaviorTests: XCTestCase {
                 renderedHeight: 40,
                 in: [source, target]
             ),
-            .rejected
+            .insert(before: target.id, edge: .top)
         )
     }
 
@@ -260,7 +260,7 @@ final class InteractionBehaviorTests: XCTestCase {
         XCTAssertTrue(SidebarDropCalculations.workspaceRowAcceptsSource(source: source, target: next))
     }
 
-    func testWorkspaceRowAcceptsSourceRejectsSelfCrossFolderAndPinnedBand() {
+    func testWorkspaceRowAcceptsSourceRejectsOnlyTheRowItself() {
         let folderA = WorkspaceFolderID()
         let folderB = WorkspaceFolderID()
         let pinnedInA = Workspace(title: "Pinned A", folderID: folderA, isPinned: true)
@@ -268,8 +268,70 @@ final class InteractionBehaviorTests: XCTestCase {
         let pinnedInB = Workspace(title: "Pinned B", folderID: folderB, isPinned: true)
 
         XCTAssertFalse(SidebarDropCalculations.workspaceRowAcceptsSource(source: pinnedInA, target: pinnedInA))
-        XCTAssertFalse(SidebarDropCalculations.workspaceRowAcceptsSource(source: pinnedInA, target: pinnedInB))
-        XCTAssertFalse(SidebarDropCalculations.workspaceRowAcceptsSource(source: pinnedInA, target: unpinnedInA))
+        // A row accepts a source from another folder or another pinned band, because the drop
+        // refiles and repins the workspace into the row it lands beside.
+        XCTAssertTrue(SidebarDropCalculations.workspaceRowAcceptsSource(source: pinnedInA, target: pinnedInB))
+        XCTAssertTrue(SidebarDropCalculations.workspaceRowAcceptsSource(source: pinnedInA, target: unpinnedInA))
+    }
+
+    func testWorkspaceRowDropPlacesACrossFolderSourceAtThePointerEdge() {
+        let folderA = WorkspaceFolderID()
+        let folderB = WorkspaceFolderID()
+        let source = Workspace(title: "Source", folderID: folderA, isPinned: false)
+        let first = Workspace(title: "First", folderID: folderB, isPinned: false)
+        let second = Workspace(title: "Second", folderID: folderB, isPinned: false)
+        let workspaces = [source, first, second]
+
+        XCTAssertEqual(
+            SidebarDropCalculations.workspaceRowDrop(
+                source: source,
+                target: first,
+                locationY: 10,
+                renderedHeight: 40,
+                in: workspaces
+            ),
+            .insert(before: first.id, edge: .top)
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.workspaceRowDrop(
+                source: source,
+                target: first,
+                locationY: 30,
+                renderedHeight: 40,
+                in: workspaces
+            ),
+            .insert(before: second.id, edge: .bottom)
+        )
+    }
+
+    func testWorkspaceRowDropPlacesAnUnpinnedSourceInThePinnedBand() {
+        let folderID = WorkspaceFolderID()
+        let pinned = Workspace(title: "Pinned", folderID: folderID, isPinned: true)
+        let source = Workspace(title: "Source", folderID: folderID, isPinned: false)
+        let workspaces = [pinned, source]
+
+        // The source sits in another band, so neither the adjacency shortcut nor the no-op check
+        // applies and the pointer half alone chooses the edge.
+        XCTAssertEqual(
+            SidebarDropCalculations.workspaceRowDrop(
+                source: source,
+                target: pinned,
+                locationY: 10,
+                renderedHeight: 40,
+                in: workspaces
+            ),
+            .insert(before: pinned.id, edge: .top)
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.workspaceRowDrop(
+                source: source,
+                target: pinned,
+                locationY: 30,
+                renderedHeight: 40,
+                in: workspaces
+            ),
+            .insert(before: nil, edge: .bottom)
+        )
     }
 
     func testContainerAcceptsWorkspaceReflectsWhetherTheWorkspaceIsAlreadyThere() {
@@ -284,40 +346,135 @@ final class InteractionBehaviorTests: XCTestCase {
         XCTAssertFalse(SidebarDropCalculations.containerAcceptsWorkspace(source: unfiled, folderID: nil))
     }
 
-    func testWorkspaceRowHighlightAcceptsOnlyACompatibleWorkspacePayload() {
+    func testWorkspaceRowFeedbackShowsTheEdgeThePointerSelects() {
         let folderA = WorkspaceFolderID()
         let folderB = WorkspaceFolderID()
         let source = Workspace(title: "Source", folderID: folderA, isPinned: true)
         let target = Workspace(title: "Target", folderID: folderA, isPinned: true)
         let otherFolder = Workspace(title: "Other", folderID: folderB, isPinned: true)
+        let workspaces = [source, target, otherFolder]
 
-        XCTAssertTrue(
-            SidebarDropCalculations.workspaceRowAcceptsDragItem(
+        XCTAssertEqual(
+            SidebarDropCalculations.workspaceRowFeedback(
                 .workspace(source.id),
                 target: target,
-                in: [source, target, otherFolder]
-            )
+                locationY: 30,
+                renderedHeight: 40,
+                in: workspaces
+            ),
+            .insertion(.bottom)
         )
-        XCTAssertFalse(
-            SidebarDropCalculations.workspaceRowAcceptsDragItem(
-                .workspace(source.id),
-                target: source,
-                in: [source, target, otherFolder]
-            )
-        )
-        XCTAssertFalse(
-            SidebarDropCalculations.workspaceRowAcceptsDragItem(
+        // A source from another folder now reads as an insertion rather than a refused drop.
+        XCTAssertEqual(
+            SidebarDropCalculations.workspaceRowFeedback(
                 .workspace(otherFolder.id),
                 target: target,
-                in: [source, target, otherFolder]
-            )
+                locationY: 10,
+                renderedHeight: 40,
+                in: workspaces
+            ),
+            .insertion(.top)
         )
-        XCTAssertFalse(
-            SidebarDropCalculations.workspaceRowAcceptsDragItem(
+        // The row a drag started from shows nothing, and a folder payload never lands on a row.
+        XCTAssertEqual(
+            SidebarDropCalculations.workspaceRowFeedback(
+                .workspace(source.id),
+                target: source,
+                locationY: 10,
+                renderedHeight: 40,
+                in: workspaces
+            ),
+            SidebarDropFeedback.none
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.workspaceRowFeedback(
                 .folder(folderB),
                 target: target,
-                in: [source, target, otherFolder]
-            )
+                locationY: 10,
+                renderedHeight: 40,
+                in: workspaces
+            ),
+            SidebarDropFeedback.none
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.workspaceRowFeedback(
+                nil,
+                target: target,
+                locationY: 10,
+                renderedHeight: 40,
+                in: workspaces
+            ),
+            SidebarDropFeedback.none
+        )
+    }
+
+    func testFolderRowFeedbackSeparatesFilingFromReordering() {
+        let folderA = WorkspaceFolder(id: WorkspaceFolderID(), title: "A")
+        let folderB = WorkspaceFolder(id: WorkspaceFolderID(), title: "B")
+        let workspace = Workspace(title: "Workspace", folderID: folderA.id)
+        let folders = [folderA, folderB]
+
+        // A workspace lands inside the folder, so the row highlights instead of showing an edge.
+        XCTAssertEqual(
+            SidebarDropCalculations.folderRowFeedback(
+                .workspace(workspace.id),
+                folderID: folderB.id,
+                nextFolderID: nil,
+                locationY: 10,
+                renderedHeight: 40,
+                workspaces: [workspace],
+                folders: folders
+            ),
+            .highlight
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.folderRowFeedback(
+                .workspace(workspace.id),
+                folderID: folderA.id,
+                nextFolderID: folderB.id,
+                locationY: 10,
+                renderedHeight: 40,
+                workspaces: [workspace],
+                folders: folders
+            ),
+            SidebarDropFeedback.none
+        )
+        // A folder lands beside the row, so it shows the edge the pointer selects.
+        XCTAssertEqual(
+            SidebarDropCalculations.folderRowFeedback(
+                .folder(folderB.id),
+                folderID: folderA.id,
+                nextFolderID: folderB.id,
+                locationY: 10,
+                renderedHeight: 40,
+                workspaces: [workspace],
+                folders: folders
+            ),
+            .insertion(.top)
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.folderRowFeedback(
+                .folder(folderA.id),
+                folderID: folderA.id,
+                nextFolderID: folderB.id,
+                locationY: 10,
+                renderedHeight: 40,
+                workspaces: [workspace],
+                folders: folders
+            ),
+            SidebarDropFeedback.none
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.folderRowFeedback(
+                nil,
+                folderID: folderA.id,
+                nextFolderID: folderB.id,
+                locationY: 10,
+                renderedHeight: 40,
+                workspaces: [workspace],
+                folders: folders
+            ),
+            SidebarDropFeedback.none
         )
     }
 

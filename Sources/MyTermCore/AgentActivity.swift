@@ -110,7 +110,7 @@ extension AgentActivity {
         switch self {
         case .working, .awaitingInput:
             self
-        case .finished:
+        case .finished, .ready, .exited:
             nil
         }
     }
@@ -120,7 +120,7 @@ extension AgentActivity {
         switch self {
         case .finished, .awaitingInput:
             true
-        case .working:
+        case .working, .ready, .exited:
             false
         }
     }
@@ -134,7 +134,7 @@ extension AgentActivity {
         switch self {
         case .awaitingInput: 2
         case .finished: 1
-        case .working: 0
+        case .working, .ready, .exited: 0
         }
     }
 
@@ -147,6 +147,10 @@ extension AgentActivity {
             "Agent finished"
         case .awaitingInput:
             "Agent is waiting for you"
+        case .ready:
+            "Agent is ready"
+        case .exited:
+            "Agent stopped"
         }
     }
 }

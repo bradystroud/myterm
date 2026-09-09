@@ -9,10 +9,14 @@ import MyTermPlatform
 /// conversation on the next launch instead of returning to a bare prompt.
 extension AppModel {
     /// The command that re-enters this pane's saved agent conversation, if it has one.
-    func agentResumeCommand(for session: TerminalSession, settings: TerminalPreferences) -> String? {
+    func agentResumeCommand(
+        for session: TerminalSession,
+        name: String?,
+        settings: TerminalPreferences
+    ) -> String? {
         guard settings.restoresAgentSessions,
               let handle = session.agentSession else { return nil }
-        return AgentSessionResume.command(for: handle)
+        return AgentSessionResume.command(for: handle, name: name)
     }
 
     func recordAgentSession(
@@ -49,10 +53,12 @@ extension AppModel {
         )
     }
 
-    /// Drops the saved conversation of a pane that has nothing running in it.
+    /// Drops the saved conversation of a pane that has nothing running in it, and the name that
+    /// went with it.
     ///
     /// A pane sitting at its shell prompt has already left its agent, so restoring it would resume
-    /// work the user finished. Panes are checked on the way out, when the answer is final.
+    /// work the user finished, and naming its tab after that work would say the wrong thing about a
+    /// pane that is back at a prompt. Panes are checked on the way out, when the answer is final.
     func forgetAgentSessionOfIdlePane(
         workspaceID: WorkspaceID,
         tabGroupID: TabGroupID,
@@ -62,7 +68,7 @@ extension AppModel {
         guard let terminal = tab(workspaceID: workspaceID, tabGroupID: tabGroupID, tabID: tabID)?
             .terminalSession,
             terminal.id == sessionID,
-            terminal.agentSession != nil,
+            terminal.agentSession != nil || terminal.agentTitle != nil,
             let process = terminalSessions[sessionID],
             process.activeForegroundProcessName == nil else { return }
 
@@ -73,6 +79,7 @@ extension AppModel {
             tabID: tabID,
             current: terminal.agentSession
         )
+        forgetAgentTitle(workspaceID: workspaceID, tabGroupID: tabGroupID, tabID: tabID)
     }
 
     private func updateAgentSession(

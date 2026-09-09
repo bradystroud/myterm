@@ -29,7 +29,7 @@ When MyTerm upgrades legacy workspace state, it keeps the original file in an ad
 
 ## The workflow
 
-- **Workspaces** have a title, can be pinned and reordered, and live inside collapsible color-coded folders. Drag one onto a folder to file it there, or onto another workspace to reorder it inside the folder it already lives in.
+- **Workspaces** have a title, can be pinned and reordered, and live inside collapsible color-coded folders. Drag one onto a folder row to file it at the end of that folder, or between two workspace rows to drop it at that exact position. A drop between rows also refiles the workspace into the folder it lands in, and pins or unpins it to match the band it lands in. Drag a folder onto another folder to reorder the folders. A line shows where the item will land, and a highlighted folder row means the item will land inside that folder.
 - **Pane groups** own their own terminal and browser tabs. Every group keeps an independent selected tab, and browser tabs keep their URL, cookies, and website data across app restarts.
 - **Panes** split right with <kbd>⌘D</kbd> and down with <kbd>⇧⌘D</kbd>. Their dividers can be dragged, and the saved proportions restore on the next launch.
 - **One app instance** handles launch requests. Opening a folder, script, SSH link, or web URL reuses the existing window instead of creating another app process.
@@ -117,6 +117,23 @@ The banner is named after the workspace, the tab, or both, whichever you pick, a
 swatch of the workspace's folder colour, so a glance is enough to tell which project wants you.
 A workspace outside a folder uses its own colour. Clicking the banner opens that tab.
 
+### Work through a backlog of waiting agents
+
+The same events fill a notifications backlog. A bell in the toolbar carries the number of agents
+waiting for you, and opening it lists them newest first, with the workspace and tab each one is in.
+Press **Show Notifications** (Command-Shift-I) to open the list from the keyboard.
+
+Click a row to go to that tab. Reaching a tab is what reads its notification, so the row disappears
+whether you clicked it, clicked the tab, or switched to that workspace. **Clear All** empties the
+list without visiting anything.
+
+One tab keeps one row, so a pane that finishes several turns does not fill the list. A question
+replaces a finished turn on the same tab, because the question is what you must answer. An agent
+that starts working again takes its own row back.
+
+The backlog is not saved either. After a relaunch it is empty, because an item that survived a
+restart would point at work you have moved on from.
+
 ### Come back to a live agent
 
 A pane that was in a Claude Code conversation rejoins that same conversation when MyTerm starts
@@ -148,6 +165,26 @@ It applies to command-clicked terminal links, to links from tools that use the `
 The browser you choose comes forward only for a link from the workspace you are looking at, while MyTerm is the active app. So a link you command-click in the pane in front of you still jumps straight to it, while one an agent opened somewhere else loads in the background and waits for you.
 
 MyTerm never sends a link to itself. If the chosen browser is missing, or if MyTerm is the default browser, the link opens in MyTerm and the app reports why.
+### Name a tab after the conversation in it
+
+A tab takes the name Claude Code gives the conversation running in it, so `/rename` in the pane
+names the tab as well. Until you rename it, the name is the topic Claude Code writes for itself as
+the conversation goes.
+
+The name comes from the terminal title, which is where Claude Code already writes it. MyTerm takes a
+title only while an agent has reported itself in that pane, so a shell's own title never becomes a
+tab name, and only the name is kept: the status glyph in front of it, and anything that is not plain
+short text, is dropped.
+
+A tab you renamed yourself keeps your name. That name is also carried back into the conversation
+when the pane rejoins it, as `claude --resume <id> --name <your name>`, so the tab and the
+conversation agree from the first line.
+
+Leaving the agent puts the tab back to **Terminal**.
+
+Turn it off with **Name tabs after agent sessions** in General Settings. Turning it off puts the
+tabs that already carry a conversation name back to their plain labels. Like the other terminal
+settings, it can be overridden for one folder or one workspace.
 
 ## Browser sessions and passkeys
 
