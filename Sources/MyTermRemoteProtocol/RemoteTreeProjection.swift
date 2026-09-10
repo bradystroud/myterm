@@ -12,12 +12,17 @@ public enum RemoteTreeProjection {
         revision: Int,
         folders: [WorkspaceFolder],
         workspaces: [Workspace],
-        agentActivity: (TabID) -> AgentActivity?
+        agentActivity: (TabID) -> AgentActivity?,
+        // Asked rather than worked out here, so what counts as a projectable conversation is
+        // defined once, beside the code that reads the agent's record.
+        hasAgentConversation: (TabID) -> Bool = { _ in false }
     ) -> RemoteTree {
         RemoteTree(
             revision: revision,
             folders: folders.map(remoteFolder),
-            workspaces: workspaces.map { remoteWorkspace($0, agentActivity: agentActivity) }
+            workspaces: workspaces.map {
+                remoteWorkspace($0, agentActivity: agentActivity, hasAgentConversation: hasAgentConversation)
+            }
         )
     }
 
@@ -31,7 +36,8 @@ public enum RemoteTreeProjection {
 
     private static func remoteWorkspace(
         _ workspace: Workspace,
-        agentActivity: (TabID) -> AgentActivity?
+        agentActivity: (TabID) -> AgentActivity?,
+        hasAgentConversation: (TabID) -> Bool
     ) -> RemoteWorkspace {
         RemoteWorkspace(
             id: workspace.id.description,
@@ -40,11 +46,17 @@ public enum RemoteTreeProjection {
             colorName: workspace.color?.rawValue,
             folderID: workspace.folderID?.description,
             isPinned: workspace.isPinned,
-            tabs: workspace.allTabs.map { remoteTab($0, agentActivity: agentActivity) }
+            tabs: workspace.allTabs.map {
+                remoteTab($0, agentActivity: agentActivity, hasAgentConversation: hasAgentConversation)
+            }
         )
     }
 
-    private static func remoteTab(_ tab: Tab, agentActivity: (TabID) -> AgentActivity?) -> RemoteTab {
+    private static func remoteTab(
+        _ tab: Tab,
+        agentActivity: (TabID) -> AgentActivity?,
+        hasAgentConversation: (TabID) -> Bool
+    ) -> RemoteTab {
         switch tab.content {
         case .terminal(let session):
             return RemoteTab(
@@ -53,7 +65,8 @@ public enum RemoteTreeProjection {
                 title: tab.displayTitle,
                 subtitle: session.workingDirectory?.lastPathComponent,
                 agentActivity: agentActivity(tab.id),
-                terminalSessionID: session.id.rawValue
+                terminalSessionID: session.id.rawValue,
+                hasAgentConversation: hasAgentConversation(tab.id)
             )
         case .browser(let session):
             return RemoteTab(
