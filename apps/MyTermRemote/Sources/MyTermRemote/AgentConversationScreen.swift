@@ -305,15 +305,78 @@ private struct AgentTextView: View {
 
     var body: some View {
         if role == .user {
-            Text(text)
+            AgentMarkdownView(text: text)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
                 .frame(maxWidth: .infinity, alignment: .trailing)
         } else {
-            Text(text)
+            AgentMarkdownView(text: text)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// Agents write markdown. `Text` reads inline markdown from a literal only, so a message that
+/// arrives as a value has to be split into blocks here and styled block by block.
+private struct AgentMarkdownView: View {
+    let text: String
+
+    var body: some View {
+        let blocks = AgentMarkdown.blocks(in: text)
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .paragraph(let body):
+                    inline(body)
+                case .heading(let level, let body):
+                    inline(body)
+                        .font(level <= 2 ? .headline : .subheadline.weight(.semibold))
+                case .bullets(let items):
+                    list(items) { _ in Text("•") }
+                case .numbered(let items):
+                    list(items) { index in Text("\(index + 1).").monospacedDigit() }
+                case .quote(let body):
+                    HStack(alignment: .top, spacing: 8) {
+                        RoundedRectangle(cornerRadius: 1).frame(width: 3)
+                            .foregroundStyle(.secondary)
+                        inline(body).foregroundStyle(.secondary)
+                    }
+                case .code(_, let body):
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(body)
+                            .font(.footnote.monospaced())
+                            .textSelection(.enabled)
+                            .padding(8)
+                    }
+                    .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func list(_ items: [String], marker: @escaping (Int) -> Text) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    marker(index).foregroundStyle(.secondary)
+                    inline(item)
+                }
+            }
+        }
+        .padding(.leading, 4)
+    }
+
+    /// Bold, italics, code spans, and links. A message the parser cannot read is shown as it came.
+    private func inline(_ body: String) -> Text {
+        if let attributed = try? AttributedString(
+            markdown: body,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            return Text(attributed)
+        }
+        return Text(body)
     }
 }
 
