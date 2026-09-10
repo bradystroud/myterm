@@ -297,23 +297,115 @@ private struct AgentEntryView: View {
     }
 }
 
-/// What was said. A person's message is tinted and indented; the agent's runs full width, because
-/// the agent does most of the talking and a bubble for every paragraph wastes a phone's width.
+/// What was said, rendered as the markdown the agent wrote.
+///
+/// A person's message is tinted and indented; the agent's runs full width, because the agent does
+/// most of the talking and a bubble for every paragraph wastes a phone's width.
 private struct AgentTextView: View {
     let text: String
     let role: RemoteAgentRole
 
     var body: some View {
+        let blocks = RemoteAgentMarkdown.blocks(of: text)
         if role == .user {
-            Text(text)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
-                .frame(maxWidth: .infinity, alignment: .trailing)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                    AgentTextBlockView(block: block)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
+            .frame(maxWidth: .infinity, alignment: .trailing)
         } else {
-            Text(text)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                    AgentTextBlockView(block: block)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct AgentTextBlockView: View {
+    let block: RemoteAgentTextBlock
+
+    var body: some View {
+        switch block {
+        case .paragraph(let text):
+            inline(text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+        case .heading(let level, let text):
+            inline(text)
+                .font(level <= 2 ? .headline : .subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 2)
+
+        case .bullet(let text):
+            marker("\u{2022}", text)
+
+        case .numbered(let number, let text):
+            marker("\(number).", text)
+
+        case .code(let language, let text):
+            AgentCodeBlockView(language: language, text: text)
+        }
+    }
+
+    /// A hanging indent, so a bullet that wraps stays clear of its own marker.
+    private func marker(_ symbol: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(symbol)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 16, alignment: .trailing)
+            inline(text)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// Bold, italics, inline code, and links, left to the system parser.
+    ///
+    /// Whitespace is preserved rather than collapsed, because the block structure was already
+    /// decided and this must not undo it. A message that will not parse is shown as it arrived,
+    /// which is worse than formatted and far better than nothing.
+    private func inline(_ text: String) -> Text {
+        let options = AttributedString.MarkdownParsingOptions(
+            allowsExtendedAttributes: false,
+            interpretedSyntax: .inlineOnlyPreservingWhitespace,
+            failurePolicy: .returnPartiallyParsedIfPossible
+        )
+        guard let attributed = try? AttributedString(markdown: text, options: options) else {
+            return Text(text)
+        }
+        return Text(attributed)
+    }
+}
+
+/// A fenced block. Scrolls sideways rather than wrapping, because a wrapped command is a command
+/// nobody can copy with confidence.
+private struct AgentCodeBlockView: View {
+    let language: String?
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let language {
+                Text(language)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(text)
+                    .font(.system(.footnote, design: .monospaced))
+                    .textSelection(.enabled)
+                    .multilineTextAlignment(.leading)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
