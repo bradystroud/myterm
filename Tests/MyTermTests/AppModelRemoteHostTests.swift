@@ -540,4 +540,98 @@ final class AppModelRemoteHostTests: XCTestCase {
 
         XCTAssertEqual(model.remoteTree(), before)
     }
+
+    // MARK: - The backlog over the socket
+
+    /// The bell reaches a device through `broadcastAgentNotifications`, and the app is what has to
+    /// call it. This drives the app from the terminal's side, the way the agent's hook does, and
+    /// listens on a real connection, so a change that files an entry without telling devices fails
+    /// here rather than on a phone.
+    func testAnAgentFinishingBehindAnotherTabReachesTheDeviceAndSoDoesReadingIt() async throws {
+        let engine = StubTerminalEngine()
+        let (model, directory) = try makeModel(engine: engine, isApplicationActive: { true })
+        defer { removeTemporaryDirectory(directory) }
+        let workspace = model.selectedWorkspace
+        let group = try XCTUnwrap(workspace.orderedGroups.first)
+        let firstTabID = group.selectedTabID
+        let firstSession = try XCTUnwrap(group.selectedTab.terminalSession?.id)
+        model.createTerminalTab()
+        XCTAssertNotEqual(model.selectedWorkspace.orderedGroups.first?.selectedTabID, firstTabID, "precondition")
+
+        let (client, collector) = try await connectDevice(to: model)
+        defer { client.disconnect(); model.remoteHost.stop() }
+        XCTAssertEqual(collector.notifications.last?.entries, [], "the hello carries the empty backlog")
+
+        // The hook's escape sequence reaches the app as this event, in the tab the user is not on.
+        let filed = expectation(description: "filed")
+        collector.onNotifications = { if collector.notifications.last?.entries.isEmpty == false { filed.fulfill() } }
+        let stub = try XCTUnwrap(model.terminalSessions[firstSession] as? StubTerminalSession)
+        stub.onEvent?(.agentActivity(AgentActivityReport(agent: "claude", activity: .finished)))
+        await fulfillment(of: [filed], timeout: 10)
+        let entry = try XCTUnwrap(collector.notifications.last?.entries.first)
+        XCTAssertEqual(entry.tabID, firstTabID.description)
+        XCTAssertEqual(entry.activity, .finished)
+        XCTAssertEqual(entry.workspaceTitle, workspace.displayTitle)
+        XCTAssertEqual(entry.tabTitle, "Terminal")
+
+        // The user reaches the tab. The device is told the backlog is empty again.
+        let read = expectation(description: "read")
+        collector.onNotifications = { if collector.notifications.last?.entries.isEmpty == true { read.fulfill() } }
+        model.selectTab(firstTabID, in: group.id)
+        await fulfillment(of: [read], timeout: 10)
+    }
+
+    private func makeModel(
+        engine: StubTerminalEngine,
+        isApplicationActive: @escaping @MainActor () -> Bool
+    ) throws -> (AppModel, URL) {
+        let directory = try makeTemporaryDirectory()
+        let model = try AppModel(
+            channel: .development,
+            applicationSupportDirectory: directory,
+            terminalEngine: engine,
+            startsTerminalProcesses: true,
+            isApplicationActive: isApplicationActive
+        )
+        return (model, directory)
+    }
+
+    /// Starts the app's own host on a free port and connects a device to it, returning once the
+    /// device has the hello's tree and backlog.
+    private func connectDevice(to model: AppModel) async throws -> (RemoteClient, NotificationCollector) {
+        model.remoteHost.preferredPort = 0
+        model.remoteHost.start()
+        var port: UInt16?
+        for _ in 0..<100 where port == nil {
+            if case .listening(let listening) = model.remoteHost.state, listening != 0 { port = listening }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let listening = try XCTUnwrap(port, "the app's host never listened")
+
+        let collector = NotificationCollector()
+        let client = RemoteClient(deviceName: "TestPhone")
+        client.delegate = collector
+        let greeted = expectation(description: "hello")
+        collector.onNotifications = { greeted.fulfill() }
+        client.connect(host: "127.0.0.1", port: listening, token: model.remoteHost.token)
+        await fulfillment(of: [greeted], timeout: 10)
+        collector.onNotifications = nil
+        return (client, collector)
+    }
+}
+
+@MainActor
+private final class NotificationCollector: RemoteClientDelegate {
+    private(set) var notifications = [RemoteNotifications]()
+    var onNotifications: (() -> Void)?
+
+    func remoteClient(_ client: RemoteClient, didReceive tree: RemoteTree) {}
+    func remoteClient(_ client: RemoteClient, didAttach attached: RemoteAttached) {}
+    func remoteClient(_ client: RemoteClient, didReceiveOutput bytes: [UInt8], for session: UUID) {}
+    func remoteClient(_ client: RemoteClient, shouldResync session: UUID) {}
+    func remoteClient(_ client: RemoteClient, didReceive activity: RemoteAgentActivity) {}
+    func remoteClient(_ client: RemoteClient, didReceive notifications: RemoteNotifications) {
+        self.notifications.append(notifications)
+        onNotifications?()
+    }
 }
