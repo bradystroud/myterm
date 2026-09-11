@@ -140,6 +140,25 @@ its terminal styling stripped, and drops the caveat, which is the same words eve
 addressed to the agent. The device shows it as a centred note, "Ran /model" with the output under
 it, rather than as a message bubble.
 
+### Switching the model
+
+Each assistant turn in the record names the model that wrote it (`claude-opus-5`), and the
+projection carries that on the turn as `model`. A turn the agent made up itself, such as the
+rate-limit notice, is written with the placeholder `<synthetic>` and carries nothing. The
+conversation's current model is the last turn that named one, so the label follows the tail with
+no message of its own.
+
+The device shows that label as a menu in the conversation's bar. `AgentModelCatalog`, shared by
+host and device, holds the switches `/model` documents: the family aliases `fable`, `opus`,
+`sonnet`, and `haiku`, and `fable[1m]`, `opus[1m]`, and `sonnet[1m]` for the million-token
+window. Choosing one types `/model <alias>` through the same reply path as any other words. There
+is no second way into the agent: the record then shows the command ran, and the label changes when
+the next answer names the new model.
+
+When the agent's last turn is its notice that one model's usage has run out, the same menu is
+offered in a banner above the reply field, and it goes away once a `/model` has been run after
+the notice. Both the bar and the banner are gated exactly as the composer is, because they type.
+
 ### Following it
 
 The file is append-only while a session runs, so following it means remembering an offset and taking

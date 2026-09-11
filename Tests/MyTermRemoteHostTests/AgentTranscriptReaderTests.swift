@@ -263,6 +263,33 @@ final class AgentTranscriptReaderTests: XCTestCase {
         XCTAssertEqual(conversation.entries.count, 1)
     }
 
+    // MARK: - The model
+
+    func testAnAssistantTurnSaysWhichModelWroteIt() {
+        let line = """
+        {"type":"assistant","uuid":"a1","message":{"model":"claude-opus-5","role":"assistant",\
+        "content":[{"type":"text","text":"Done."}]}}
+        """
+        XCTAssertEqual(reader.entry(from: line)?.model, "claude-opus-5")
+    }
+
+    func testANoticeTheAgentMadeUpNamesNoModel() {
+        // The rate-limit notice, as written: an assistant turn whose model is a placeholder.
+        let line = """
+        {"type":"assistant","uuid":"a1","message":{"model":"<synthetic>","role":"assistant",\
+        "content":[{"type":"text","text":"You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."}]},\
+        "error":"rate_limit"}
+        """
+        let entry = reader.entry(from: line)
+        XCTAssertNil(entry?.model)
+        XCTAssertEqual(entry?.blocks.count, 1)
+    }
+
+    func testAPersonsTurnNamesNoModel() {
+        let line = #"{"type":"user","uuid":"u1","message":{"role":"user","content":"hi","model":"claude-opus-5"}}"#
+        XCTAssertNil(reader.entry(from: line)?.model)
+    }
+
     // MARK: - Local commands
 
     // The shapes here are the agent's own, taken from live sessions: a user turn wrapped in markup

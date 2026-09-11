@@ -28,7 +28,16 @@ struct AgentConversationScreen: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if !isShowingTerminal, let conversation = followedConversation {
+                    AgentModelMenu(tab: tab, store: store, current: conversation.currentModel) {
+                        // Text rather than a Label: the bar draws a Label as its icon alone, and
+                        // the name is the whole point of this item.
+                        Text(modelLabel(for: conversation))
+                            .font(.subheadline.weight(.medium))
+                    }
+                    .accessibilityIdentifier("agent.model")
+                }
                 Button(isShowingTerminal ? "Conversation" : "Terminal",
                        systemImage: isShowingTerminal ? "bubble.left.and.bubble.right" : "terminal") {
                     isShowingTerminal.toggle()
@@ -40,9 +49,21 @@ struct AgentConversationScreen: View {
         .onDisappear { store.stopFollowingConversation(tabID: tab.id) }
     }
 
+    /// The store's conversation, when it is this tab's. A late one for a tab the person has left is
+    /// not shown under this tab's name.
+    private var followedConversation: RemoteAgentConversation? {
+        guard let conversation = store.conversation, conversation.tabID == tab.id else { return nil }
+        return conversation
+    }
+
+    /// What the toolbar calls the model. "Model" until an answer has named one.
+    private func modelLabel(for conversation: RemoteAgentConversation) -> String {
+        conversation.currentModel.flatMap(AgentModelCatalog.label(forModel:)) ?? "Model"
+    }
+
     @ViewBuilder
     private var conversation: some View {
-        if let conversation = store.conversation, conversation.tabID == tab.id {
+        if let conversation = followedConversation {
             entries(of: conversation)
                 .navigationTitle(conversation.title ?? tab.title)
                 .navigationBarTitleDisplayMode(.inline)
@@ -96,6 +117,17 @@ struct AgentConversationScreen: View {
     /// not reading a reply, so a text field there would take something that goes nowhere.
     @ViewBuilder
     private var composer: some View {
+        VStack(spacing: 0) {
+            if let conversation = followedConversation,
+               AgentModelCatalog.usageLimitNotice(in: conversation.entries) != nil {
+                AgentLimitBanner(tab: tab, store: store, current: conversation.currentModel)
+            }
+            input
+        }
+    }
+
+    @ViewBuilder
+    private var input: some View {
         if !store.client.allowsMutation {
             Label("View only. Typing is turned off on the Mac.", systemImage: "eye")
                 .font(.footnote)
@@ -226,6 +258,82 @@ private struct AgentPromptBar: View {
         // loose buttons, and so the identifier names a container that can actually be found.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent.prompt")
+    }
+}
+
+/// The model the agent answers with, and the ones it could be switched to.
+///
+/// Choosing one types `/model <alias>` the way a reply is typed. There is no second way into the
+/// agent: the command reaches it as words, the agent's own record shows it ran, and the label
+/// changes when the next answer names the new model. Gated as the composer is, because it types.
+private struct AgentModelMenu<Label: View>: View {
+    let tab: RemoteTab
+    let store: RemoteSessionStore
+    /// The model identifier the transcript last named, to mark the matching choice.
+    let current: String?
+    @ViewBuilder let label: () -> Label
+
+    var body: some View {
+        Menu {
+            Section("Switch model") {
+                ForEach(AgentModelCatalog.choices.filter { !$0.hasExtendedContext }) { choice in
+                    button(for: choice)
+                }
+            }
+            Section("1M context") {
+                ForEach(AgentModelCatalog.choices.filter(\.hasExtendedContext)) { choice in
+                    button(for: choice)
+                }
+            }
+        } label: {
+            label()
+        }
+        // While the agent is stopped on a permission prompt it is not reading typed text, so a
+        // command sent then would go nowhere.
+        .disabled(!store.client.allowsMutation || !store.promptOptions.isEmpty)
+    }
+
+    private func button(for choice: AgentModelCatalog.Choice) -> some View {
+        Button {
+            store.reply(tabID: tab.id, text: choice.command)
+        } label: {
+            if choice == current.flatMap(AgentModelCatalog.choice(matchingModel:)) {
+                SwiftUI.Label(choice.label, systemImage: "checkmark")
+            } else {
+                Text(choice.label)
+            }
+        }
+        .accessibilityIdentifier("agent.model.\(choice.argument)")
+    }
+}
+
+/// The agent has said it is out of one model's usage. Switching is the way on from a phone, so
+/// the offer sits where the person is looking, above the reply field, rather than only in the bar.
+private struct AgentLimitBanner: View {
+    let tab: RemoteTab
+    let store: RemoteSessionStore
+    let current: String?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Label("Your agent has hit its limit on this model", systemImage: "gauge.with.needle")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            AgentModelMenu(tab: tab, store: store, current: current) {
+                Text("Switch model")
+                    .font(.footnote.weight(.semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .accessibilityIdentifier("agent.switchModel")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.orange.opacity(0.12))
+        .overlay(alignment: .top) { Divider() }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("agent.limitNotice")
     }
 }
 

@@ -62,12 +62,31 @@ public struct RemoteAgentEntry: Codable, Equatable, Sendable, Identifiable {
     public var role: RemoteAgentRole
     public var timestamp: Date?
     public var blocks: [RemoteAgentBlock]
+    /// The model that produced an assistant turn, as the agent names it (`claude-opus-5`). Absent
+    /// on a person's turn, and on a turn the agent marks as synthetic: a rate-limit notice is
+    /// written as an assistant message, and it says nothing about which model is in use.
+    public var model: String?
 
-    public init(id: String, role: RemoteAgentRole, timestamp: Date? = nil, blocks: [RemoteAgentBlock]) {
+    public init(
+        id: String,
+        role: RemoteAgentRole,
+        timestamp: Date? = nil,
+        blocks: [RemoteAgentBlock],
+        model: String? = nil
+    ) {
         self.id = id
         self.role = role
         self.timestamp = timestamp
         self.blocks = blocks
+        self.model = model
+    }
+}
+
+extension RemoteAgentConversation {
+    /// The model the agent last answered with. Carried on each turn rather than on the
+    /// conversation, so it follows the tail without a message of its own.
+    public var currentModel: String? {
+        entries.last { $0.model != nil }?.model
     }
 }
 

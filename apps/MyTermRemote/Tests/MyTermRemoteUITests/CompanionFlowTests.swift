@@ -379,3 +379,80 @@ final class AgentAnsweringTests: XCTestCase {
         try? screenshot.pngRepresentation.write(to: url)
     }
 }
+
+/// Switching the agent's model from the device.
+///
+/// Skipped unless the demo host was pointed at a transcript, as `AgentAnsweringTests` is. The
+/// transcript it expects ends on the agent's rate-limit notice after a `/model` run, so the screen
+/// has a note to render, a model to name, and a banner to offer.
+final class AgentModelSwitchTests: XCTestCase {
+    private let environment = ProcessInfo.processInfo.environment
+    private var host: String { environment["MYTERM_REMOTE_HOST"] ?? "localhost" }
+    private var port: String { environment["MYTERM_REMOTE_PORT"] ?? "" }
+    private var token: String { environment["MYTERM_REMOTE_TOKEN"] ?? "demotoken" }
+    private var shotsDirectory: String? { environment["MYTERM_SHOTS_DIR"] }
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        try XCTSkipIf(port.isEmpty, "Set MYTERM_REMOTE_PORT to the port a MyTerm host is listening on.")
+        try XCTSkipIf(
+            environment["MYTERM_REMOTE_AGENT_TAB"] == nil,
+            "Set MYTERM_REMOTE_AGENT_TAB to a tab the host offers a conversation for."
+        )
+    }
+
+    @MainActor
+    func testALimitNoticeOffersTheSameModelMenuTheToolbarHolds() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["MYTERM_REMOTE_RESET_STATE"] = "1"
+        app.launchArguments += [
+            "-remote.host", host,
+            "-remote.port", port,
+            "-remote.token", token,
+            "-remote.reconnectsOnLaunch", "YES",
+            "-remote.openTab", try XCTUnwrap(environment["MYTERM_REMOTE_AGENT_TAB"]),
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.textFields["agent.reply"].waitForExistence(timeout: 25), "an agent tab should offer a reply field")
+
+        // The command the person ran is a note, not a bubble of markup.
+        let note = app.descendants(matching: .any)["agent.localCommand"].firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 10), "a slash command should be shown as a note")
+        XCTAssertTrue(note.label.contains("Ran /model"), "the note names the command: \(note.label)")
+        XCTAssertFalse(note.label.contains("<"), "no markup reaches the screen: \(note.label)")
+
+        // The bar names the model that last answered, not the notice's placeholder.
+        let model = app.buttons["agent.model"]
+        XCTAssertTrue(model.waitForExistence(timeout: 5), "the toolbar should carry the model")
+        XCTAssertTrue(model.label.contains("Fable 5.1"), "the model is the last one that answered: \(model.label)")
+
+        XCTAssertTrue(app.otherElements["agent.limitNotice"].waitForExistence(timeout: 5), "the limit notice should be offered a way on")
+        snap("70-limit-notice")
+
+        app.buttons["agent.switchModel"].tap()
+        let opus = app.buttons["Opus 5"]
+        XCTAssertTrue(opus.waitForExistence(timeout: 5), "the banner opens the model list")
+        XCTAssertTrue(app.buttons["Opus 5 (1M)"].exists, "the larger window is offered too")
+        snap("71-model-menu")
+
+        // Choosing types `/model opus` into the tab through the reply path, and the banner stays
+        // until the transcript says the switch happened. This host's tab is a plain shell, so what
+        // is checked here is that the choice was sent without a refusal.
+        opus.tap()
+        XCTAssertFalse(app.staticTexts["refusal.message"].waitForExistence(timeout: 3), "the command should be accepted")
+        snap("72-model-chosen")
+    }
+
+    @MainActor
+    private func snap(_ name: String) {
+        let screenshot = XCUIScreen.main.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        guard let shotsDirectory else { return }
+        let url = URL(fileURLWithPath: shotsDirectory).appendingPathComponent("\(name).png")
+        try? screenshot.pngRepresentation.write(to: url)
+    }
+}

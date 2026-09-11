@@ -327,11 +327,21 @@ final class RemoteProtocolTests: XCTestCase {
             tabID: "tab-1",
             title: "fixing the build",
             agent: "claude",
-            entries: [RemoteAgentEntry(id: "e1", role: .user, blocks: blocks)]
+            entries: [
+                RemoteAgentEntry(id: "e1", role: .user, blocks: blocks),
+                RemoteAgentEntry(id: "e2", role: .assistant, blocks: [.text("ok")], model: "claude-opus-5"),
+            ]
         ))
 
         let decoded = try RemoteControlCodec.decode(RemoteControlCodec.encode(message))
 
         XCTAssertEqual(decoded, message)
+    }
+
+    /// A model is only ever an assistant turn's; an entry from before the field existed still reads.
+    func testAnEntryWithoutAModelStillDecodes() throws {
+        let json = #"{"id":"e1","role":"user","blocks":[{"type":"text","text":"hi"}]}"#
+        let entry = try JSONDecoder().decode(RemoteAgentEntry.self, from: Data(json.utf8))
+        XCTAssertNil(entry.model)
     }
 }

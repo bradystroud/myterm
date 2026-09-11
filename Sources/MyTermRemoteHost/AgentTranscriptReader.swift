@@ -202,8 +202,18 @@ public struct AgentTranscriptReader {
             id: id,
             role: role,
             timestamp: timestamp,
-            blocks: blocks
+            blocks: blocks,
+            model: role == .assistant ? model(from: message) : nil
         )
+    }
+
+    /// The model an assistant turn came from, if it came from one at all.
+    private static func model(from message: [String: Any]) -> String? {
+        guard let model = nonEmpty(message["model"] as? String),
+              model != AgentModelCatalog.syntheticModel else {
+            return nil
+        }
+        return model
     }
 
     // MARK: - Local commands
