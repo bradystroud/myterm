@@ -80,6 +80,14 @@ final class AppModel {
         guard agentNotifications.isEnabled else { return }
         _ = agentNotificationPoster
     }
+    /// The agents that finished, or asked a question, while the user was looking somewhere else.
+    /// Runtime only: an entry that survived a relaunch would point at work the user has moved on from.
+    var agentInbox = AgentNotificationInbox()
+    /// Whether the notifications popover is open. The toolbar bell and the menu command share it.
+    var isAgentNotificationsPresented = false
+    /// Tabs that have an agent in them, by agent name, as the hooks last reported.
+    /// Runtime only: it says what is running now, which is the one thing a saved answer cannot say.
+    var liveAgentTabs: [TabID: String] = [:]
     var paneTabDragSession: PaneTabDragSession?
     var paneTabDragRegistrations: [TabGroupID: PaneTabDragRegistration] = [:]
     var nextBrowserAddressFocusToken: UInt64 = 0
@@ -144,7 +152,7 @@ final class AppModel {
         updates: UpdateController? = nil,
         agentNotifications: AgentNotificationSettings? = nil,
         makeAgentNotificationPoster: @escaping @MainActor () -> any AgentNotificationPosting = { UserNotificationPoster() },
-        isApplicationActive: @escaping @MainActor () -> Bool = { NSApp.isActive }
+        isApplicationActive: @escaping @MainActor () -> Bool = { NSApp?.isActive ?? false }
     ) throws {
         self.channel = channel
         let supportDirectory = try applicationSupportDirectory ?? Self.applicationSupportDirectory()
@@ -819,10 +827,11 @@ final class AppModel {
     func moveWorkspace(
         _ workspaceID: WorkspaceID,
         to folderID: WorkspaceFolderID?,
-        before targetID: WorkspaceID?
+        before targetID: WorkspaceID?,
+        isPinned: Bool? = nil
     ) {
         perform {
-            try store.moveWorkspace(workspaceID, to: folderID, before: targetID)
+            try store.moveWorkspace(workspaceID, to: folderID, before: targetID, isPinned: isPinned)
             applyResolvedRuntimeSettings(to: [workspaceID])
         }
     }
@@ -2182,7 +2191,11 @@ final class AppModel {
                 shell: shellURL(for: settings.shell),
                 workingDirectory: workingDirectory,
                 initialCommand: initialCommand
-                    ?? (keepsSavedDirectory ? agentResumeCommand(for: session, settings: settings) : nil),
+                    ?? (keepsSavedDirectory ? agentResumeCommand(
+                        for: session,
+                        name: tab(workspaceID: workspaceID, tabGroupID: tabGroupID, tabID: tabID)?.customTitle,
+                        settings: settings
+                    ) : nil),
                 environment: MyTermBrowserLauncher.environment(
                     executableURL: browserLauncherURL,
                     workspaceID: workspaceID,
@@ -2399,8 +2412,20 @@ final class AppModel {
                 tabID: tabID,
                 sessionID: sessionID
             )
-        case .titleChanged:
-            break
+            recordAgentPresence(
+                report,
+                workspaceID: workspaceID,
+                tabGroupID: tabGroupID,
+                tabID: tabID
+            )
+        case .titleChanged(let title):
+            recordAgentTitle(
+                title,
+                workspaceID: workspaceID,
+                tabGroupID: tabGroupID,
+                tabID: tabID,
+                sessionID: sessionID
+            )
         }
     }
 
@@ -2419,6 +2444,7 @@ final class AppModel {
             removeTerminalRuntime(sessionID)
         }
         forgetAgentAttention(forTab: tab.id)
+        forgetAgentPresence(forTab: tab.id)
     }
 
     /// Closes a tab in any workspace and ends its process, asking the user nothing.
@@ -2539,6 +2565,9 @@ final class AppModel {
         for workspaceID in workspaceIDs {
             guard let workspace = store.workspaces.first(where: { $0.id == workspaceID }),
                   let settings = try? store.resolvedSettings(for: workspaceID) else { continue }
+            if !settings.namesTabsFromAgentSessions {
+                clearAgentTitles(in: workspace)
+            }
             let configuration = runtimeConfiguration(for: settings)
             for tab in workspace.allTabs {
                 if let sessionID = tab.terminalSession?.id {

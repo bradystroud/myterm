@@ -78,6 +78,141 @@ private struct DismissibleBanner: View {
     }
 }
 
+/// The backlog of agents waiting for the user, reached from a bell in the toolbar.
+///
+/// The bell stays in place when nothing is waiting, so the toolbar never reflows, and it carries a
+/// count only when there is one. Opening a row goes to that tab, which is also what reads the entry.
+private struct AgentNotificationsButton: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        let items = model.agentNotificationItems
+        Button {
+            model.isAgentNotificationsPresented.toggle()
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: items.isEmpty ? "bell" : "bell.badge.fill")
+                    .symbolRenderingMode(.hierarchical)
+                if !items.isEmpty {
+                    Text("\(items.count)")
+                        .font(.caption.monospacedDigit())
+                }
+            }
+        }
+        .accessibilityLabel(accessibilityLabel(count: items.count))
+        .help(items.isEmpty ? "Notifications" : "Notifications (\(items.count) waiting)")
+        .popover(isPresented: $model.isAgentNotificationsPresented, arrowEdge: .bottom) {
+            AgentNotificationsList(model: model)
+        }
+    }
+
+    private func accessibilityLabel(count: Int) -> String {
+        switch count {
+        case 0: "Notifications, none waiting"
+        case 1: "Notifications, 1 waiting"
+        default: "Notifications, \(count) waiting"
+        }
+    }
+}
+
+private struct AgentNotificationsList: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        // Read here rather than taking a copy from the bell, so an agent that reports while the
+        // popover is open changes the list the user is looking at.
+        let items = model.agentNotificationItems
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Notifications")
+                    .font(.headline)
+                Spacer()
+                Button("Clear All") { model.clearAgentNotifications() }
+                    .buttonStyle(.borderless)
+                    .disabled(items.isEmpty)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            if items.isEmpty {
+                Text("Nothing is waiting for you.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 14)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(items) { item in
+                            if item.id != items.first?.id {
+                                Divider().padding(.leading, 12)
+                            }
+                            AgentNotificationRow(item: item) {
+                                model.isAgentNotificationsPresented = false
+                                model.openAgentNotification(item)
+                            }
+                        }
+                    }
+                }
+                // Tall enough for a real backlog, short enough that the popover stays a popover.
+                .frame(maxHeight: 320)
+            }
+        }
+        .frame(width: 320)
+    }
+}
+
+private struct AgentNotificationRow: View {
+    let item: AgentNotificationItem
+    let open: () -> Void
+
+    @State private var isHovering = false
+
+    private var isQuestion: Bool { item.activity == .awaitingInput }
+
+    var body: some View {
+        Button(action: open) {
+            HStack(alignment: .top, spacing: 8) {
+                // The glyph differs as well as the color, so the two states never read alike.
+                Image(systemName: isQuestion ? "questionmark.circle.fill" : "checkmark.circle.fill")
+                    .foregroundStyle(isQuestion ? Color.orange : Color.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.activity.attentionDescription)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 8) {
+                        Text("\(item.workspaceTitle) · \(item.tabTitle)")
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 0)
+                        (Text(item.date, style: .relative) + Text(" ago"))
+                            // The elapsed time is short and grows as it counts, so it keeps its
+                            // width and the tab name gives way instead.
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(isHovering ? Color.primary.opacity(0.06) : .clear)
+                    .padding(.horizontal, 6)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .accessibilityLabel(
+            "\(item.activity.attentionDescription), \(item.workspaceTitle), \(item.tabTitle)"
+        )
+        .accessibilityHint("Opens the tab and clears the notification")
+    }
+}
+
 private struct WorkspaceContentView: View {
     @Bindable var model: AppModel
 
@@ -212,6 +347,8 @@ private struct WorkspaceContentView: View {
                     Button("Split Right") { model.splitFocusedTerminal(orientation: .horizontal) }
                     Button("Split Below") { model.splitFocusedTerminal(orientation: .vertical) }
                 }
+
+                AgentNotificationsButton(model: model)
             }
         }
     }
@@ -427,7 +564,7 @@ private struct WorkspaceSidebarRow: View {
     @Binding var activeDragItem: SidebarDragItem?
 
     @Environment(\.openSettings) private var openSettings
-    @State private var isDropTargeted = false
+    @State private var dropFeedback: SidebarDropFeedback = .none
     @State private var renderedRowHeight: CGFloat = 0
 
     private var agentAttention: AgentActivity? {
@@ -472,34 +609,34 @@ private struct WorkspaceSidebarRow: View {
                     }
                 }
         }
-        .dropDestination(for: SidebarDragItem.self) { items, location in
-            guard items.count == 1,
-                  case .workspace(let sourceID) = items.first,
-                  let source = model.workspaces.first(where: { $0.id == sourceID }) else {
-                return false
-            }
-            switch SidebarDropCalculations.workspaceRowDrop(
-                source: source,
-                target: workspace,
-                locationY: location.y,
-                renderedHeight: renderedRowHeightValue,
-                in: model.workspaces
-            ) {
-            case .rejected:
-                return false
-            case .insert(let before, _):
-                model.moveWorkspace(sourceID, to: workspace.folderID, before: before)
-                activeDragItem = nil
-                return true
-            }
-        } isTargeted: { isTargeted in
-            isDropTargeted = isTargeted
-        }
+        .onDrop(of: [.mytermSidebarItem], delegate: SidebarRowDropDelegate(
+            feedback: { location in
+                SidebarDropCalculations.workspaceRowFeedback(
+                    activeDragItem,
+                    target: workspace,
+                    locationY: location.y,
+                    renderedHeight: renderedRowHeightValue,
+                    in: model.workspaces
+                )
+            },
+            commit: commitDrop,
+            current: $dropFeedback
+        ))
         .background(
             RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .fill(workspaceBackgroundColor)
                 .allowsHitTesting(false)
         )
+        .overlay(alignment: .top) {
+            if dropFeedback.insertionEdge == .top {
+                SidebarInsertionLine(leadingInset: indentation)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if dropFeedback.insertionEdge == .bottom {
+                SidebarInsertionLine(leadingInset: indentation)
+            }
+        }
         .captureSidebarRenderedHeight($renderedRowHeight)
         // Drag and drop wraps the row in AppKit interaction views. Keep the final hit shape outside
         // those wrappers so every visible part of the row still participates in List selection.
@@ -594,14 +731,9 @@ private struct WorkspaceSidebarRow: View {
         }
     }
 
+    // A reorder draws an insertion line on the edge the workspace will land on, so this row keeps
+    // showing its own colour rather than tinting as though the drop landed inside it.
     private var workspaceBackgroundColor: Color {
-        if isDropTargeted && SidebarDropCalculations.workspaceRowAcceptsDragItem(
-            activeDragItem,
-            target: workspace,
-            in: model.workspaces
-        ) {
-            return Color.accentColor.opacity(0.12)
-        }
         guard let color = workspace.color else { return .clear }
         let isSelected = model.store.selectedWorkspaceID == workspace.id
         return color.swiftUIColor.opacity(isSelected ? 0.30 : 0.18)
@@ -609,6 +741,34 @@ private struct WorkspaceSidebarRow: View {
 
     private var renderedRowHeightValue: CGFloat {
         SidebarDropCalculations.renderedHeight(measured: renderedRowHeight, minimum: rowHeight)
+    }
+
+    private func commitDrop(at location: CGPoint) -> Bool {
+        guard case .workspace(let sourceID) = activeDragItem,
+              let source = model.workspaces.first(where: { $0.id == sourceID }) else {
+            return false
+        }
+        switch SidebarDropCalculations.workspaceRowDrop(
+            source: source,
+            target: workspace,
+            locationY: location.y,
+            renderedHeight: renderedRowHeightValue,
+            in: model.workspaces
+        ) {
+        case .rejected:
+            return false
+        case .insert(let before, _):
+            // The target row owns the destination folder and pinned band, so a drop from another
+            // folder or band refiles and repins the workspace in the same move.
+            model.moveWorkspace(
+                sourceID,
+                to: workspace.folderID,
+                before: before,
+                isPinned: workspace.isPinned
+            )
+            activeDragItem = nil
+            return true
+        }
     }
 
     private func canMoveWorkspace(by offset: Int) -> Bool {
@@ -629,7 +789,7 @@ private struct WorkspaceFolderRow: View {
     @Binding var activeDragItem: SidebarDragItem?
 
     @Environment(\.openSettings) private var openSettings
-    @State private var isDropTargeted = false
+    @State private var dropFeedback: SidebarDropFeedback = .none
     @State private var renderedRowHeight: CGFloat = 0
 
     var body: some View {
@@ -665,42 +825,36 @@ private struct WorkspaceFolderRow: View {
                     }
                 }
         }
-        .dropDestination(for: SidebarDragItem.self) { items, location in
-            guard items.count == 1, let item = items.first else { return false }
-            switch item {
-            case .workspace(let sourceID):
-                guard let source = model.workspaces.first(where: { $0.id == sourceID }),
-                      SidebarDropCalculations.containerAcceptsWorkspace(source: source, folderID: folder.id) else {
-                    return false
-                }
-                model.moveWorkspace(sourceID, to: folder.id)
-                activeDragItem = nil
-                return true
-            case .folder(let sourceID):
-                switch SidebarDropCalculations.folderRowDrop(
-                    sourceID: sourceID,
+        .onDrop(of: [.mytermSidebarItem], delegate: SidebarRowDropDelegate(
+            feedback: { location in
+                SidebarDropCalculations.folderRowFeedback(
+                    activeDragItem,
                     folderID: folder.id,
                     nextFolderID: nextFolderID,
                     locationY: location.y,
                     renderedHeight: renderedRowHeightValue,
-                    in: model.folders
-                ) {
-                case .rejected:
-                    return false
-                case .insert(let before, _):
-                    model.moveFolder(sourceID, before: before)
-                    activeDragItem = nil
-                    return true
-                }
-            }
-        } isTargeted: {
-            isDropTargeted = $0
-        }
+                    workspaces: model.workspaces,
+                    folders: model.folders
+                )
+            },
+            commit: commitDrop,
+            current: $dropFeedback
+        ))
         .background(
             RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(isValidDropTarget ? Color.accentColor.opacity(0.12) : .clear)
+                .fill(dropFeedback.isHighlighted ? Color.accentColor.opacity(0.12) : .clear)
                 .allowsHitTesting(false)
         )
+        .overlay(alignment: .top) {
+            if dropFeedback.insertionEdge == .top {
+                SidebarInsertionLine(leadingInset: 0)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if dropFeedback.insertionEdge == .bottom {
+                SidebarInsertionLine(leadingInset: 0)
+            }
+        }
         .captureSidebarRenderedHeight($renderedRowHeight)
         // Keep the final interaction shape outside drag/drop's AppKit wrappers so the entire
         // folder row remains available to double-click and expand or collapse.
@@ -760,13 +914,35 @@ private struct WorkspaceFolderRow: View {
         SidebarDropCalculations.renderedHeight(measured: renderedRowHeight, minimum: rowHeight)
     }
 
-    private var isValidDropTarget: Bool {
-        isDropTargeted && SidebarDropCalculations.containerAcceptsDragItem(
-            activeDragItem,
-            folderID: folder.id,
-            workspaces: model.workspaces,
-            folders: model.folders
-        )
+    private func commitDrop(at location: CGPoint) -> Bool {
+        switch activeDragItem {
+        case .workspace(let sourceID):
+            guard let source = model.workspaces.first(where: { $0.id == sourceID }),
+                  SidebarDropCalculations.containerAcceptsWorkspace(source: source, folderID: folder.id) else {
+                return false
+            }
+            model.moveWorkspace(sourceID, to: folder.id)
+            activeDragItem = nil
+            return true
+        case .folder(let sourceID):
+            switch SidebarDropCalculations.folderRowDrop(
+                sourceID: sourceID,
+                folderID: folder.id,
+                nextFolderID: nextFolderID,
+                locationY: location.y,
+                renderedHeight: renderedRowHeightValue,
+                in: model.folders
+            ) {
+            case .rejected:
+                return false
+            case .insert(let before, _):
+                model.moveFolder(sourceID, before: before)
+                activeDragItem = nil
+                return true
+            }
+        case nil:
+            return false
+        }
     }
 
     private func toggleExpansion() {

@@ -3258,7 +3258,7 @@ final class AppModelTests: XCTestCase {
 
         session.emit(.agentActivity(AgentActivityReport(agent: "claude", activity: .ready, sessionID: "abc-123")))
 
-        XCTAssertNil(model.agentAttention(forTab: tab.id), "A resumed pane has nothing for the user to act on")
+        XCTAssertNil(model.agentActivity(forTab: tab.id), "A resumed pane has nothing for the user to act on")
         XCTAssertEqual(
             model.selectedWorkspace.selectedTab?.terminalSession?.agentSession,
             AgentSessionHandle(agent: "claude", sessionID: "abc-123"),

@@ -33,9 +33,16 @@ extension AppModel {
         )
         // Setting nil removes the entry, which is how a read tab loses its cook. A session that
         // only started, or has ended, has no cook to show and clears the tab the same way.
-        agentAttention[tabID] = report.activity.showsCook
-            ? (isInFrontOfUser ? report.activity.afterReading : report.activity)
-            : nil
+        let shown: AgentActivity? = report.activity.showsCook ? report.activity : nil
+        agentAttention[tabID] = isInFrontOfUser ? shown.flatMap(\.afterReading) : shown
+        // The bell keeps the same answer as the cook: a tab in front of the user has nothing to file.
+        agentInbox.record(
+            report.activity,
+            workspaceID: workspaceID,
+            tabGroupID: tabGroupID,
+            tabID: tabID,
+            isTabVisible: isInFrontOfUser
+        )
         broadcastAgentActivity(forTab: tabID)
         // A banner is for being away from the app. With MyTerm in front, the cook has already said it.
         guard !isApplicationActive() else { return }
@@ -58,12 +65,14 @@ extension AppModel {
     }
 
     func markAsRead(tabID: TabID) {
+        agentInbox.markRead(tabID: tabID)
         guard let activity = agentAttention[tabID] else { return }
         agentAttention[tabID] = activity.afterReading
         broadcastAgentActivity(forTab: tabID)
     }
 
     func forgetAgentAttention(forTab tabID: TabID) {
+        agentInbox.markRead(tabID: tabID)
         guard agentAttention.removeValue(forKey: tabID) != nil else { return }
         broadcastAgentActivity(forTab: tabID)
     }

@@ -160,24 +160,33 @@ private final class ScannerCoordinator: NSObject, AVCaptureMetadataOutputObjects
     /// whole step runs off the main actor to keep the UI responsive while the camera spins up.
     func start() {
         sessionQueue.async { [self] in
-            session.beginConfiguration()
-            defer { session.commitConfiguration() }
-
-            guard
-                let device = AVCaptureDevice.default(for: .video),
-                let input = try? AVCaptureDeviceInput(device: device),
-                session.canAddInput(input)
-            else { return }
-            session.addInput(input)
-
-            let output = AVCaptureMetadataOutput()
-            guard session.canAddOutput(output) else { return }
-            session.addOutput(output)
-            output.setMetadataObjectsDelegate(self, queue: sessionQueue)
-            output.metadataObjectTypes = [.qr]
-
+            // `startRunning()` raises an Objective-C exception, which Swift cannot catch, if it is
+            // called between `beginConfiguration()` and `commitConfiguration()`. So the session is
+            // configured and committed first, and started only once that has succeeded.
+            guard configure() else { return }
             session.startRunning()
         }
+    }
+
+    /// Adds the camera and the QR output. Returns false when the device has no usable camera, in
+    /// which case the session is left empty and never started.
+    private func configure() -> Bool {
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+
+        guard
+            let device = AVCaptureDevice.default(for: .video),
+            let input = try? AVCaptureDeviceInput(device: device),
+            session.canAddInput(input)
+        else { return false }
+        session.addInput(input)
+
+        let output = AVCaptureMetadataOutput()
+        guard session.canAddOutput(output) else { return false }
+        session.addOutput(output)
+        output.setMetadataObjectsDelegate(self, queue: sessionQueue)
+        output.metadataObjectTypes = [.qr]
+        return true
     }
 
     func stop() {

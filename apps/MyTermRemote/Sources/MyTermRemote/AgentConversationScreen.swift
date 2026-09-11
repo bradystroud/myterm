@@ -297,115 +297,86 @@ private struct AgentEntryView: View {
     }
 }
 
-/// What was said, rendered as the markdown the agent wrote.
-///
-/// A person's message is tinted and indented; the agent's runs full width, because the agent does
-/// most of the talking and a bubble for every paragraph wastes a phone's width.
+/// What was said. A person's message is tinted and indented; the agent's runs full width, because
+/// the agent does most of the talking and a bubble for every paragraph wastes a phone's width.
 private struct AgentTextView: View {
     let text: String
     let role: RemoteAgentRole
 
     var body: some View {
-        let blocks = RemoteAgentMarkdown.blocks(of: text)
         if role == .user {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                    AgentTextBlockView(block: block)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
-            .frame(maxWidth: .infinity, alignment: .trailing)
+            AgentMarkdownView(text: text)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
+                .frame(maxWidth: .infinity, alignment: .trailing)
         } else {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                    AgentTextBlockView(block: block)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            AgentMarkdownView(text: text)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
 
-private struct AgentTextBlockView: View {
-    let block: RemoteAgentTextBlock
-
-    var body: some View {
-        switch block {
-        case .paragraph(let text):
-            inline(text)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-        case .heading(let level, let text):
-            inline(text)
-                .font(level <= 2 ? .headline : .subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 2)
-
-        case .bullet(let text):
-            marker("\u{2022}", text)
-
-        case .numbered(let number, let text):
-            marker("\(number).", text)
-
-        case .code(let language, let text):
-            AgentCodeBlockView(language: language, text: text)
-        }
-    }
-
-    /// A hanging indent, so a bullet that wraps stays clear of its own marker.
-    private func marker(_ symbol: String, _ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(symbol)
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 16, alignment: .trailing)
-            inline(text)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    /// Bold, italics, inline code, and links, left to the system parser.
-    ///
-    /// Whitespace is preserved rather than collapsed, because the block structure was already
-    /// decided and this must not undo it. A message that will not parse is shown as it arrived,
-    /// which is worse than formatted and far better than nothing.
-    private func inline(_ text: String) -> Text {
-        let options = AttributedString.MarkdownParsingOptions(
-            allowsExtendedAttributes: false,
-            interpretedSyntax: .inlineOnlyPreservingWhitespace,
-            failurePolicy: .returnPartiallyParsedIfPossible
-        )
-        guard let attributed = try? AttributedString(markdown: text, options: options) else {
-            return Text(text)
-        }
-        return Text(attributed)
-    }
-}
-
-/// A fenced block. Scrolls sideways rather than wrapping, because a wrapped command is a command
-/// nobody can copy with confidence.
-private struct AgentCodeBlockView: View {
-    let language: String?
+/// Agents write markdown. `Text` reads inline markdown from a literal only, so a message that
+/// arrives as a value has to be split into blocks here and styled block by block.
+private struct AgentMarkdownView: View {
     let text: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let language {
-                Text(language)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(text)
-                    .font(.system(.footnote, design: .monospaced))
-                    .textSelection(.enabled)
-                    .multilineTextAlignment(.leading)
+        let blocks = AgentMarkdown.blocks(in: text)
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .paragraph(let body):
+                    inline(body)
+                case .heading(let level, let body):
+                    inline(body)
+                        .font(level <= 2 ? .headline : .subheadline.weight(.semibold))
+                case .bullets(let items):
+                    list(items) { _ in Text("•") }
+                case .numbered(let items):
+                    list(items) { index in Text("\(index + 1).").monospacedDigit() }
+                case .quote(let body):
+                    HStack(alignment: .top, spacing: 8) {
+                        RoundedRectangle(cornerRadius: 1).frame(width: 3)
+                            .foregroundStyle(.secondary)
+                        inline(body).foregroundStyle(.secondary)
+                    }
+                case .code(_, let body):
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(body)
+                            .font(.footnote.monospaced())
+                            .textSelection(.enabled)
+                            .padding(8)
+                    }
+                    .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
             }
         }
-        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func list(_ items: [String], marker: @escaping (Int) -> Text) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    marker(index).foregroundStyle(.secondary)
+                    inline(item)
+                }
+            }
+        }
+        .padding(.leading, 4)
+    }
+
+    /// Bold, italics, code spans, and links. A message the parser cannot read is shown as it came.
+    private func inline(_ body: String) -> Text {
+        if let attributed = try? AttributedString(
+            markdown: body,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            return Text(attributed)
+        }
+        return Text(body)
     }
 }
 
