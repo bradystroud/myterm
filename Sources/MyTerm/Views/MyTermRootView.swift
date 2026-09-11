@@ -354,24 +354,54 @@ private struct WorkspaceContentView: View {
     }
 }
 
+/// What a sidebar row needs to take part in the drag in flight: the rows as they are currently
+/// shown (the model with any open preview applied) and the sidebar's handling of what the row
+/// resolves under the pointer.
+private struct SidebarDropSession {
+    let workspaces: [Workspace]
+    let folders: [WorkspaceFolder]
+    let previewing: SidebarDropPreviewing
+    let commit: (SidebarDropFeedback) -> Bool
+}
+
 private struct WorkspaceSidebar: View {
     @Bindable var model: AppModel
     @State private var activeDragItem: SidebarDragItem?
+    @State private var dropPreview: SidebarDropPreview?
+    @State private var pendingPreviewClose: UUID?
     @State private var isUnfiledHeaderDropTargeted = false
     @State private var isUnfiledDropTargeted = false
 
+    private var previewedWorkspaces: [Workspace] {
+        SidebarDropCalculations.previewedWorkspaces(model.workspaces, applying: dropPreview)
+    }
+
+    private var previewedFolders: [WorkspaceFolder] {
+        SidebarDropCalculations.previewedFolders(model.folders, applying: dropPreview)
+    }
+
     private var ungroupedWorkspaces: [Workspace] {
-        ordered(model.workspaces.filter { $0.folderID == nil })
+        ordered(previewedWorkspaces.filter { $0.folderID == nil })
     }
 
     private var filedRows: [SidebarVisibleRow] {
-        SidebarVisibleRows.filed(folders: model.folders, workspaces: model.workspaces)
+        SidebarVisibleRows.filed(folders: previewedFolders, workspaces: previewedWorkspaces)
+    }
+
+    private var dropSession: SidebarDropSession {
+        SidebarDropSession(
+            workspaces: previewedWorkspaces,
+            folders: previewedFolders,
+            previewing: SidebarDropPreviewing(apply: applyDropFeedback, exited: rowDropExited),
+            commit: commitDrop
+        )
     }
 
     var body: some View {
-        let foldersByID = Dictionary(uniqueKeysWithValues: model.folders.map { ($0.id, $0) })
-        let workspacesByID = Dictionary(uniqueKeysWithValues: model.workspaces.map { ($0.id, $0) })
-        let nextFolderIDs = Dictionary(uniqueKeysWithValues: zip(model.folders, model.folders.dropFirst()).map {
+        let folders = previewedFolders
+        let foldersByID = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0) })
+        let workspacesByID = Dictionary(uniqueKeysWithValues: previewedWorkspaces.map { ($0.id, $0) })
+        let nextFolderIDs = Dictionary(uniqueKeysWithValues: zip(folders, folders.dropFirst()).map {
             ($0.0.id, $0.1.id)
         })
         List(selection: Binding(
@@ -395,7 +425,8 @@ private struct WorkspaceSidebar: View {
                             workspace: workspace,
                             rowHeight: sidebarRowHeight,
                             indentation: 0,
-                            activeDragItem: $activeDragItem
+                            activeDragItem: $activeDragItem,
+                            dropSession: dropSession
                         )
                     }
                 } header: {
@@ -410,6 +441,7 @@ private struct WorkspaceSidebar: View {
                             moveWorkspaces(items, to: nil)
                         } isTargeted: {
                             isUnfiledHeaderDropTargeted = $0
+                            if $0 { applyDropFeedback(.none) }
                         }
                 }
             }
@@ -417,6 +449,10 @@ private struct WorkspaceSidebar: View {
         .listStyle(.sidebar)
         .environment(\.defaultMinListRowHeight, model.selectedWorkspaceSettings.compactSidebar ? 22 : 30)
         .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 480)
+        .onChange(of: activeDragItem) { _, item in
+            // The drag ending anywhere, including a cancel over the terminal, closes the preview.
+            if item == nil { setDropPreview(nil) }
+        }
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 10) {
                 Menu {
@@ -472,6 +508,7 @@ private struct WorkspaceSidebar: View {
                 moveWorkspaces(items, to: nil)
             } isTargeted: {
                 isUnfiledDropTargeted = $0
+                if $0 { applyDropFeedback(.none) }
             }
         }
     }
@@ -495,7 +532,8 @@ private struct WorkspaceSidebar: View {
                     folder: folder,
                     nextFolderID: nextFolderIDs[folder.id],
                     rowHeight: sidebarRowHeight,
-                    activeDragItem: $activeDragItem
+                    activeDragItem: $activeDragItem,
+                    dropSession: dropSession
                 )
             }
         case .workspace(let workspaceID):
@@ -505,9 +543,70 @@ private struct WorkspaceSidebar: View {
                     workspace: workspace,
                     rowHeight: sidebarRowHeight,
                     indentation: SidebarRowMetrics.filedWorkspaceIndent,
-                    activeDragItem: $activeDragItem
+                    activeDragItem: $activeDragItem,
+                    dropSession: dropSession
                 )
             }
+        }
+    }
+
+    private func setDropPreview(_ preview: SidebarDropPreview?) {
+        pendingPreviewClose = nil
+        guard dropPreview != preview else { return }
+        withAnimation(.snappy(duration: 0.2)) {
+            dropPreview = preview
+        }
+    }
+
+    private func applyDropFeedback(_ feedback: SidebarDropFeedback) {
+        switch feedback {
+        case .none, .highlight:
+            setDropPreview(nil)
+        case .preview(let preview):
+            setDropPreview(preview)
+        case .keep:
+            pendingPreviewClose = nil
+        }
+    }
+
+    /// Rows only learn that the pointer left them, not where it went. Crossing from one row to the
+    /// next reports an exit and then an entry in the same pass, so the exit alone must not close
+    /// the preview or every crossing would snap the rows back and forth. The close is deferred
+    /// long enough for a neighbouring row's entry to cancel it; only a pointer that has really
+    /// left the rows lets it run.
+    private func rowDropExited() {
+        let token = UUID()
+        pendingPreviewClose = token
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            guard pendingPreviewClose == token else { return }
+            setDropPreview(nil)
+        }
+    }
+
+    /// Commits the order the sidebar is showing. Clearing the preview and moving the model in
+    /// the same pass leaves the rendered rows exactly where they are, so a drop never animates.
+    private func commitDrop(_ feedback: SidebarDropFeedback) -> Bool {
+        let preview: SidebarDropPreview?
+        switch feedback {
+        case .preview(let next):
+            preview = next
+        case .keep:
+            preview = dropPreview
+        case .none, .highlight:
+            preview = nil
+        }
+        pendingPreviewClose = nil
+        dropPreview = nil
+        activeDragItem = nil
+        switch preview {
+        case .workspace(let sourceID, let folderID, let isPinned, let before):
+            model.moveWorkspace(sourceID, to: folderID, before: before, isPinned: isPinned)
+            return true
+        case .folder(let sourceID, let before):
+            model.moveFolder(sourceID, before: before)
+            return true
+        case nil:
+            return false
         }
     }
 
@@ -562,6 +661,7 @@ private struct WorkspaceSidebarRow: View {
     let rowHeight: CGFloat
     let indentation: CGFloat
     @Binding var activeDragItem: SidebarDragItem?
+    let dropSession: SidebarDropSession
 
     @Environment(\.openSettings) private var openSettings
     @State private var dropFeedback: SidebarDropFeedback = .none
@@ -609,34 +709,15 @@ private struct WorkspaceSidebarRow: View {
                     }
                 }
         }
-        .onDrop(of: [.mytermSidebarItem], delegate: SidebarRowDropDelegate(
-            feedback: { location in
-                SidebarDropCalculations.workspaceRowFeedback(
-                    activeDragItem,
-                    target: workspace,
-                    locationY: location.y,
-                    renderedHeight: renderedRowHeightValue,
-                    in: model.workspaces
-                )
-            },
-            commit: commitDrop,
-            current: $dropFeedback
-        ))
+        .onDrop(of: [.mytermSidebarItem], delegate: dropDelegate)
         .background(
             RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .fill(workspaceBackgroundColor)
                 .allowsHitTesting(false)
         )
-        .overlay(alignment: .top) {
-            if dropFeedback.insertionEdge == .top {
-                SidebarInsertionLine(leadingInset: indentation)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if dropFeedback.insertionEdge == .bottom {
-                SidebarInsertionLine(leadingInset: indentation)
-            }
-        }
+        // The row in the list stands in for the item in the user's hand: it shows where the drop
+        // will land, so it reads as a placeholder rather than a second copy.
+        .opacity(isDragSource ? 0.4 : 1)
         .captureSidebarRenderedHeight($renderedRowHeight)
         // Drag and drop wraps the row in AppKit interaction views. Keep the final hit shape outside
         // those wrappers so every visible part of the row still participates in List selection.
@@ -743,32 +824,26 @@ private struct WorkspaceSidebarRow: View {
         SidebarDropCalculations.renderedHeight(measured: renderedRowHeight, minimum: rowHeight)
     }
 
-    private func commitDrop(at location: CGPoint) -> Bool {
-        guard case .workspace(let sourceID) = activeDragItem,
-              let source = model.workspaces.first(where: { $0.id == sourceID }) else {
-            return false
-        }
-        switch SidebarDropCalculations.workspaceRowDrop(
-            source: source,
-            target: workspace,
-            locationY: location.y,
-            renderedHeight: renderedRowHeightValue,
-            in: model.workspaces
-        ) {
-        case .rejected:
-            return false
-        case .insert(let before, _):
-            // The target row owns the destination folder and pinned band, so a drop from another
-            // folder or band refiles and repins the workspace in the same move.
-            model.moveWorkspace(
-                sourceID,
-                to: workspace.folderID,
-                before: before,
-                isPinned: workspace.isPinned
-            )
-            activeDragItem = nil
-            return true
-        }
+    private var isDragSource: Bool {
+        activeDragItem == .workspace(workspace.id)
+    }
+
+    private var dropDelegate: SidebarRowDropDelegate {
+        SidebarRowDropDelegate(
+            renderedHeight: { renderedRowHeightValue },
+            feedback: { location in
+                SidebarDropCalculations.workspaceRowFeedback(
+                    activeDragItem,
+                    target: workspace,
+                    locationY: location.y,
+                    renderedHeight: renderedRowHeightValue,
+                    in: dropSession.workspaces
+                )
+            },
+            commit: dropSession.commit,
+            preview: dropSession.previewing,
+            current: $dropFeedback
+        )
     }
 
     private func canMoveWorkspace(by offset: Int) -> Bool {
@@ -787,6 +862,7 @@ private struct WorkspaceFolderRow: View {
     let nextFolderID: WorkspaceFolderID?
     let rowHeight: CGFloat
     @Binding var activeDragItem: SidebarDragItem?
+    let dropSession: SidebarDropSession
 
     @Environment(\.openSettings) private var openSettings
     @State private var dropFeedback: SidebarDropFeedback = .none
@@ -825,36 +901,13 @@ private struct WorkspaceFolderRow: View {
                     }
                 }
         }
-        .onDrop(of: [.mytermSidebarItem], delegate: SidebarRowDropDelegate(
-            feedback: { location in
-                SidebarDropCalculations.folderRowFeedback(
-                    activeDragItem,
-                    folderID: folder.id,
-                    nextFolderID: nextFolderID,
-                    locationY: location.y,
-                    renderedHeight: renderedRowHeightValue,
-                    workspaces: model.workspaces,
-                    folders: model.folders
-                )
-            },
-            commit: commitDrop,
-            current: $dropFeedback
-        ))
+        .onDrop(of: [.mytermSidebarItem], delegate: dropDelegate)
         .background(
             RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .fill(dropFeedback.isHighlighted ? Color.accentColor.opacity(0.12) : .clear)
                 .allowsHitTesting(false)
         )
-        .overlay(alignment: .top) {
-            if dropFeedback.insertionEdge == .top {
-                SidebarInsertionLine(leadingInset: 0)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if dropFeedback.insertionEdge == .bottom {
-                SidebarInsertionLine(leadingInset: 0)
-            }
-        }
+        .opacity(isDragSource ? 0.4 : 1)
         .captureSidebarRenderedHeight($renderedRowHeight)
         // Keep the final interaction shape outside drag/drop's AppKit wrappers so the entire
         // folder row remains available to double-click and expand or collapse.
@@ -914,35 +967,38 @@ private struct WorkspaceFolderRow: View {
         SidebarDropCalculations.renderedHeight(measured: renderedRowHeight, minimum: rowHeight)
     }
 
-    private func commitDrop(at location: CGPoint) -> Bool {
-        switch activeDragItem {
-        case .workspace(let sourceID):
-            guard let source = model.workspaces.first(where: { $0.id == sourceID }),
-                  SidebarDropCalculations.containerAcceptsWorkspace(source: source, folderID: folder.id) else {
-                return false
-            }
-            model.moveWorkspace(sourceID, to: folder.id)
-            activeDragItem = nil
-            return true
-        case .folder(let sourceID):
-            switch SidebarDropCalculations.folderRowDrop(
-                sourceID: sourceID,
-                folderID: folder.id,
-                nextFolderID: nextFolderID,
-                locationY: location.y,
-                renderedHeight: renderedRowHeightValue,
-                in: model.folders
-            ) {
-            case .rejected:
-                return false
-            case .insert(let before, _):
-                model.moveFolder(sourceID, before: before)
-                activeDragItem = nil
-                return true
-            }
-        case nil:
-            return false
-        }
+    private var isDragSource: Bool {
+        activeDragItem == .folder(folder.id)
+    }
+
+    private var dropDelegate: SidebarRowDropDelegate {
+        SidebarRowDropDelegate(
+            renderedHeight: { renderedRowHeightValue },
+            feedback: { location in
+                SidebarDropCalculations.folderRowFeedback(
+                    activeDragItem,
+                    folderID: folder.id,
+                    nextFolderID: nextFolderID,
+                    locationY: location.y,
+                    renderedHeight: renderedRowHeightValue,
+                    workspaces: dropSession.workspaces,
+                    folders: dropSession.folders
+                )
+            },
+            commit: commitDrop,
+            preview: dropSession.previewing,
+            current: $dropFeedback
+        )
+    }
+
+    /// A workspace filed into this folder is the one drop the sidebar-wide preview does not cover,
+    /// so the row commits it itself; everything else is the previewed order.
+    private func commitDrop(_ feedback: SidebarDropFeedback) -> Bool {
+        guard feedback.isHighlighted else { return dropSession.commit(feedback) }
+        guard case .workspace(let sourceID) = activeDragItem else { return false }
+        model.moveWorkspace(sourceID, to: folder.id)
+        activeDragItem = nil
+        return true
     }
 
     private func toggleExpansion() {
