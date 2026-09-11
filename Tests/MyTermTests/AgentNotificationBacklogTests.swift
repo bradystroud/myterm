@@ -26,7 +26,7 @@ final class AgentNotificationBacklogTests: XCTestCase {
         XCTAssertTrue(model.needsAgentAttention(workspaceID: workspace.id))
     }
 
-    func testTheTabInFrontOfTheUserIsNotFiled() throws {
+    func testTheTabInFrontOfTheUserIsNotFiledButIsRemembered() throws {
         let harness = try makeHarness()
         let model = harness.model
         let workspace = model.selectedWorkspace
@@ -34,7 +34,53 @@ final class AgentNotificationBacklogTests: XCTestCase {
 
         harness.record(.finished, workspaceID: workspace.id, tabGroupID: group.id, tabID: group.selectedTabID)
 
-        XCTAssertTrue(model.agentNotificationItems.isEmpty)
+        XCTAssertTrue(model.agentNotificationItems.isEmpty, "the bell has nothing to say about a tab the user watched")
+        let history = try XCTUnwrap(model.remoteNotifications()).entries
+        XCTAssertEqual(history.map(\.tabID), [group.selectedTabID.description], "a device still learns it happened")
+        XCTAssertEqual(history.map(\.isRead), [true])
+    }
+
+    func testADeviceReceivesWhatWasReadAsHistoryNewestFirst() throws {
+        let harness = try makeHarness()
+        let model = harness.model
+        let workspace = model.selectedWorkspace
+        let group = try XCTUnwrap(workspace.orderedGroups.first)
+        let firstTabID = group.selectedTabID
+        model.createTerminalTab()
+        let secondTabID = try XCTUnwrap(model.selectedWorkspace.orderedGroups.first?.selectedTabID)
+        model.createWorkspace()
+
+        harness.record(.finished, workspaceID: workspace.id, tabGroupID: group.id, tabID: firstTabID)
+        model.markAsRead(tabID: firstTabID)
+        harness.record(.awaitingInput, workspaceID: workspace.id, tabGroupID: group.id, tabID: secondTabID)
+
+        XCTAssertEqual(model.agentNotificationItems.map(\.id), [secondTabID], "the bell lists only what is unread")
+        let history = try XCTUnwrap(model.remoteNotifications()).entries
+        XCTAssertEqual(history.map(\.tabID), [secondTabID.description, firstTabID.description])
+        XCTAssertEqual(history.map(\.isRead), [false, true])
+    }
+
+    func testTheHistoryComesBackReadAfterARelaunch() throws {
+        let harness = try makeHarness()
+        let model = harness.model
+        let workspace = model.selectedWorkspace
+        let group = try XCTUnwrap(workspace.orderedGroups.first)
+        let tabID = group.selectedTabID
+        model.createWorkspace()
+        harness.record(.awaitingInput, workspaceID: workspace.id, tabGroupID: group.id, tabID: tabID)
+        XCTAssertEqual(model.agentNotificationCount, 1)
+
+        let relaunched = try AppModel(
+            channel: .development,
+            applicationSupportDirectory: model.agentInboxURL.deletingLastPathComponent().deletingLastPathComponent(),
+            terminalEngine: nil,
+            startsTerminalProcesses: false
+        )
+
+        XCTAssertTrue(relaunched.agentNotificationItems.isEmpty, "the agent went with the process; nothing is waiting")
+        let history = try XCTUnwrap(relaunched.remoteNotifications()).entries
+        XCTAssertEqual(history.map(\.tabID), [tabID.description], "but a device still learns what happened")
+        XCTAssertEqual(history.map(\.isRead), [true])
     }
 
     func testTheSelectedTabIsFiledWhileTheAppIsBehindAnother() throws {
@@ -210,6 +256,7 @@ final class AgentNotificationBacklogTests: XCTestCase {
         let entries = try XCTUnwrap(model.remoteNotifications()).entries
         XCTAssertEqual(entries.map(\.tabID), [secondTabID.description, firstTabID.description])
         XCTAssertEqual(entries.map(\.activity), [.awaitingInput, .finished])
+        XCTAssertEqual(entries.map(\.isRead), [false, false])
         XCTAssertEqual(entries.map(\.workspaceID), [workspace.id.description, workspace.id.description])
         XCTAssertEqual(entries.map(\.workspaceTitle), [workspace.displayTitle, workspace.displayTitle])
         XCTAssertEqual(entries.map(\.tabTitle), ["Terminal", "Terminal"])

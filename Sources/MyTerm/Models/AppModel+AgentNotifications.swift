@@ -1,6 +1,7 @@
 import Foundation
 import MyTermCore
 import MyTermRemoteProtocol
+import OSLog
 
 /// The backlog of agents waiting for the user, behind the bell in the toolbar.
 ///
@@ -19,15 +20,20 @@ extension AppModel {
         return agentInbox.containsTab(in: workspace.allTabs.map(\.id))
     }
 
-    /// The backlog as the popover shows it, newest first.
-    ///
+    /// The backlog as the popover shows it: what is unread, newest first.
+    var agentNotificationItems: [AgentNotificationItem] {
+        resolve(agentInbox.items)
+    }
+
+    var agentNotificationCount: Int { agentNotificationItems.count }
+
     /// Titles are resolved on every read rather than copied when the entry is filed, so renaming a
     /// tab, or an agent renaming its own conversation, renames the row that points at it. So is the
     /// pane: a tab dragged into another pane is still the tab that is waiting. An entry whose tab is
     /// gone is dropped rather than shown as a row that leads nowhere.
-    var agentNotificationItems: [AgentNotificationItem] {
+    private func resolve(_ entries: [AgentInboxEntry]) -> [AgentNotificationItem] {
         let workspacesByID = Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) })
-        return agentInbox.items.compactMap { entry in
+        return entries.compactMap { entry in
             guard let workspace = workspacesByID[entry.workspaceID],
                   let tabGroupID = workspace.groupID(containing: entry.tabID),
                   let tab = workspace.tab(id: entry.tabID) else {
@@ -39,24 +45,25 @@ extension AppModel {
                 tabGroupID: tabGroupID,
                 activity: entry.activity,
                 date: entry.date,
+                isRead: entry.isRead,
                 workspaceTitle: workspace.displayTitle,
                 tabTitle: tab.customTitle ?? tab.automaticDisplayTitle
             )
         }
     }
 
-    var agentNotificationCount: Int { agentNotificationItems.count }
-
-    /// The backlog as a device receives it, for its Latest tab.
+    /// Everything the bell has listed, read and unread, as a device receives it for its Latest tab.
+    /// A device that connects after the user has caught up still learns what happened.
     func remoteNotifications() -> RemoteNotifications? {
-        RemoteNotifications(entries: agentNotificationItems.map { item in
+        RemoteNotifications(entries: resolve(agentInbox.history).map { item in
             RemoteNotification(
                 tabID: item.id.description,
                 workspaceID: item.workspaceID.description,
                 workspaceTitle: item.workspaceTitle,
                 tabTitle: item.tabTitle,
                 activity: item.activity,
-                date: item.date
+                date: item.date,
+                isRead: item.isRead
             )
         })
     }
@@ -83,8 +90,33 @@ extension AppModel {
         for entry in agentInbox.items {
             markAsRead(tabID: entry.tabID)
         }
-        agentInbox.removeAll()
+        agentInbox.markAllRead()
         broadcastAgentNotifications()
+    }
+
+    /// The history outlives a launch, so a device that connects tomorrow still sees today. Written
+    /// whole on every change: it is small, and a change is rare next to what a terminal writes.
+    func persistAgentInbox() {
+        do {
+            let data = try JSONEncoder().encode(agentInbox)
+            try FileManager.default.createDirectory(
+                at: agentInboxURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: agentInboxURL, options: .atomic)
+        } catch {
+            Logger(subsystem: "com.gordonbeeming.myterm", category: "agent-notifications")
+                .error("Could not save the agent notification history: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// A history that cannot be read starts over rather than keeping the app from launching.
+    static func loadAgentInbox(from url: URL) -> AgentNotificationInbox {
+        guard let data = try? Data(contentsOf: url),
+              let inbox = try? JSONDecoder().decode(AgentNotificationInbox.self, from: data) else {
+            return AgentNotificationInbox()
+        }
+        return inbox
     }
 }
 
@@ -95,6 +127,7 @@ struct AgentNotificationItem: Identifiable, Equatable {
     let tabGroupID: TabGroupID
     let activity: AgentActivity
     let date: Date
+    let isRead: Bool
     let workspaceTitle: String
     let tabTitle: String
 }

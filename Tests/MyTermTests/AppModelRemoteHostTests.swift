@@ -560,7 +560,7 @@ final class AppModelRemoteHostTests: XCTestCase {
 
         let (client, collector) = try await connectDevice(to: model)
         defer { client.disconnect(); model.remoteHost.stop() }
-        XCTAssertEqual(collector.notifications.last?.entries, [], "the hello carries the empty backlog")
+        XCTAssertEqual(collector.notifications.last?.entries, [], "the hello carries the empty history")
 
         // The hook's escape sequence reaches the app as this event, in the tab the user is not on.
         let filed = expectation(description: "filed")
@@ -574,11 +574,12 @@ final class AppModelRemoteHostTests: XCTestCase {
         XCTAssertEqual(entry.workspaceTitle, workspace.displayTitle)
         XCTAssertEqual(entry.tabTitle, "Terminal")
 
-        // The user reaches the tab. The device is told the backlog is empty again.
+        // The user reaches the tab. The device is told the entry is read, and keeps it as history.
         let read = expectation(description: "read")
-        collector.onNotifications = { if collector.notifications.last?.entries.isEmpty == true { read.fulfill() } }
+        collector.onNotifications = { if collector.notifications.last?.entries.first?.isRead == true { read.fulfill() } }
         model.selectTab(firstTabID, in: group.id)
         await fulfillment(of: [read], timeout: 10)
+        XCTAssertEqual(collector.notifications.last?.entries.map(\.tabID), [firstTabID.description])
     }
 
     func testClosingTheSelectedTabTellsTheDeviceTheTabItLandsOnIsRead() async throws {
@@ -602,7 +603,7 @@ final class AppModelRemoteHostTests: XCTestCase {
         await fulfillment(of: [filed], timeout: 10)
 
         let read = expectation(description: "read")
-        collector.onNotifications = { if collector.notifications.last?.entries.isEmpty == true { read.fulfill() } }
+        collector.onNotifications = { if collector.notifications.last?.entries.first?.isRead == true { read.fulfill() } }
         model.closeTab(secondTabID)
         await fulfillment(of: [read], timeout: 10)
     }
