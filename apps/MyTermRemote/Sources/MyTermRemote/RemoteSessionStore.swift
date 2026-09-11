@@ -32,6 +32,12 @@ final class RemoteSessionStore {
     private(set) var promptOptions: [RemoteAgentPromptOption] = []
     /// Set while an answer is in flight, so the buttons cannot be pressed twice.
     private(set) var isAnswering = false
+    /// The dialog a screen-only command drew on the followed tab, while the Mac says it is up.
+    /// Its rows are already in the conversation as the command's output; this is what keeps the
+    /// offer to dismiss it on screen.
+    private(set) var screen: RemoteAgentScreen?
+    /// Set while a dismissal is in flight, so the button cannot be pressed twice.
+    private(set) var isDismissingScreen = false
     /// The tab whose screen is showing. Reaching a tab takes its banner down, and an agent that
     /// reports in this tab has nothing to announce.
     @ObservationIgnored
@@ -110,6 +116,8 @@ final class RemoteSessionStore {
         isLoadingConversation = false
         promptOptions = []
         isAnswering = false
+        screen = nil
+        isDismissingScreen = false
     }
 
     func reply(tabID: String, text: String) {
@@ -130,6 +138,13 @@ final class RemoteSessionStore {
         client.denyAgentPrompt(tabID: tabID)
     }
 
+    /// Asks the Mac to close the dialog a screen-only command drew. The Mac sends the Escape and
+    /// says whether it took.
+    func dismissScreen(tabID: String) {
+        isDismissingScreen = true
+        client.dismissAgentScreen(tabID: tabID)
+    }
+
     /// Forgets the Mac's tree. For leaving a Mac, not for losing it: a dropped connection keeps the
     /// tree so the screen stays where the user left it while the device reconnects.
     func clearTree() {
@@ -138,6 +153,8 @@ final class RemoteSessionStore {
         isLoadingConversation = false
         promptOptions = []
         isAnswering = false
+        screen = nil
+        isDismissingScreen = false
     }
 
     func dismissRefusal() {
@@ -206,6 +223,27 @@ extension RemoteSessionStore: RemoteClientDelegate {
         isAnswering = false
     }
 
+    /// What a screen-only command drew, put into the conversation as that command's row.
+    ///
+    /// The row is the device's own: the agent never wrote it, so it is not in the record the Mac
+    /// relays, and it is added here rather than by the host. Once, by the capture's id, because
+    /// the Mac reports the same dialog again after every dismissal.
+    func remoteClient(_ client: RemoteClient, didReceive screen: RemoteAgentScreen) {
+        guard var current = conversation, current.tabID == screen.tabID else { return }
+        let id = "screen-\(screen.id)"
+        if !screen.command.output.isEmpty, !current.entries.contains(where: { $0.id == id }) {
+            current.entries.append(RemoteAgentEntry(
+                id: id,
+                role: .system,
+                timestamp: Date(),
+                blocks: [.localCommand(screen.command)]
+            ))
+            conversation = current
+        }
+        self.screen = screen.isShowing ? screen : nil
+        isDismissingScreen = false
+    }
+
     func remoteClient(_ client: RemoteClient, didRefuse error: RemoteError) {
         // An attach that failed belongs to the screen that asked. Everything else is a passing
         // notice: the tree the Mac sends next already shows what did and did not change.
@@ -217,6 +255,9 @@ extension RemoteSessionStore: RemoteClientDelegate {
             // The banner says what happened. Freeing the buttons matters as much: a refused answer
             // that left them disabled would look like the Mac had stopped listening.
             isAnswering = false
+        }
+        if error.code == "dismissAgentScreen" || error.code == "denied" {
+            isDismissingScreen = false
         }
         if error.code == "attachAgent" {
             // The tab has no conversation to show. The screen falls back to the terminal rather

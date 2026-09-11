@@ -261,7 +261,44 @@ struct AgentNoticeBanner: View {
     }
 }
 
-/// A command ran and its answer is on the Mac's screen, where the phone cannot read it.
+/// A command's dialog is open on the Mac, and the phone has read it into the conversation.
+///
+/// The dialog stays until something closes it, and while it is up the agent is not reading its
+/// prompt. Dismissing sends the Mac the Escape every one of these dialogs offers, and the bar
+/// stays while the Mac says the dialog did. The terminal is one tap away for the rest of it: a
+/// dialog taller than the Mac's terminal is scrolled there, not here.
+struct AgentScreenDismissBar: View {
+    let command: String
+    let isEnabled: Bool
+    let dismiss: () -> Void
+    let openTerminal: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Label("\(command) is open on your Mac", systemImage: "display")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Terminal", action: openTerminal)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityIdentifier("agent.screen.terminal")
+            Button("Dismiss", action: dismiss)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!isEnabled)
+                .accessibilityIdentifier("agent.screen.dismiss")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("agent.screen")
+    }
+}
+
+/// A command ran and its answer is on the Mac's screen, where the phone could not read it.
 struct AgentScreenNoticeBar: View {
     let command: AgentCommandCatalog.Command
     let openTerminal: () -> Void
