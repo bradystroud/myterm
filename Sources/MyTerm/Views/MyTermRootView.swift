@@ -115,8 +115,45 @@ private struct AgentNotificationsButton: View {
     }
 }
 
+/// Pure geometry for sizing the notification list's scroll area from measured row heights.
+///
+/// Kept free of SwiftUI so the "how tall" math is unit-testable without hosting a view.
+enum AgentNotificationsScrollLayout {
+    /// A glance should cover a working set of agents without the popover turning into a window.
+    static let maxVisibleRows = 5
+
+    /// How much of the next row to reveal below the visible set, as a fraction of a row's height,
+    /// so a longer backlog reads as "scroll for more" rather than a hard, unexplained cutoff.
+    private static let nextRowPeekFraction: CGFloat = 0.4
+
+    /// - Parameters:
+    ///   - rowHeights: Measured heights of the rows, in display order. Rows not yet measured are
+    ///     simply absent; only a leading run of measured heights is used.
+    ///   - dividerHeight: Measured height of the divider drawn between rows.
+    ///   - totalRowCount: Total number of rows in the list, including any not yet measured.
+    static func scrollHeight(
+        rowHeights: [CGFloat],
+        dividerHeight: CGFloat,
+        totalRowCount: Int
+    ) -> CGFloat {
+        let visibleRows = rowHeights.prefix(maxVisibleRows)
+        guard !visibleRows.isEmpty else { return 0 }
+
+        let rowsHeight = visibleRows.reduce(0, +)
+        let dividersHeight = dividerHeight * CGFloat(visibleRows.count - 1)
+        let hasMoreRows = totalRowCount > visibleRows.count
+        guard hasMoreRows else { return rowsHeight + dividersHeight }
+
+        let averageRowHeight = rowsHeight / CGFloat(visibleRows.count)
+        return rowsHeight + dividersHeight + dividerHeight + averageRowHeight * nextRowPeekFraction
+    }
+}
+
 private struct AgentNotificationsList: View {
     @Bindable var model: AppModel
+
+    @State private var rowHeights: [AgentNotificationItem.ID: CGFloat] = [:]
+    @State private var dividerHeight: CGFloat = 0
 
     var body: some View {
         // Read here rather than taking a copy from the bell, so an agent that reports while the
@@ -147,17 +184,30 @@ private struct AgentNotificationsList: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(items) { item in
                             if item.id != items.first?.id {
-                                Divider().padding(.leading, 12)
+                                Divider()
+                                    .padding(.leading, 12)
+                                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                                        dividerHeight = $0
+                                    }
                             }
                             AgentNotificationRow(item: item) {
                                 model.isAgentNotificationsPresented = false
                                 model.openAgentNotification(item)
                             }
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                                rowHeights[item.id] = $0
+                            }
                         }
                     }
                 }
-                // Tall enough for a real backlog, short enough that the popover stays a popover.
-                .frame(maxHeight: 320)
+                .frame(
+                    maxHeight: AgentNotificationsScrollLayout.scrollHeight(
+                        rowHeights: items.prefix(AgentNotificationsScrollLayout.maxVisibleRows)
+                            .compactMap { rowHeights[$0.id] },
+                        dividerHeight: dividerHeight,
+                        totalRowCount: items.count
+                    )
+                )
             }
         }
         .frame(width: 320)
@@ -180,6 +230,9 @@ private struct AgentNotificationRow: View {
                     .foregroundStyle(isQuestion ? Color.orange : Color.accentColor)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.activity.attentionDescription)
+                        // Capped so a long tab title or agent message can't blow a single row out
+                        // to the point it dominates the five-row budget below.
+                        .lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     HStack(spacing: 8) {
                         Text("\(item.workspaceTitle) · \(item.tabTitle)")
