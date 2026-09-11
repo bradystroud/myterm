@@ -2495,6 +2495,11 @@ final class AppModel {
         }) {
             restoreRuntimeObjects(in: selectedWorkspace)
         }
+        // Closing moves the selection to a neighbour, which is as much reaching a tab as clicking
+        // it. Only while MyTerm is in front, though: a device can close a tab on a Mac nobody is at.
+        if isApplicationActive() {
+            markVisibleTabsAsRead()
+        }
     }
 
     private func removeTerminalRuntime(_ sessionID: TerminalSessionID) {

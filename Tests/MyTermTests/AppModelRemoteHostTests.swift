@@ -581,6 +581,32 @@ final class AppModelRemoteHostTests: XCTestCase {
         await fulfillment(of: [read], timeout: 10)
     }
 
+    func testClosingTheSelectedTabTellsTheDeviceTheTabItLandsOnIsRead() async throws {
+        let engine = StubTerminalEngine()
+        let (model, directory) = try makeModel(engine: engine, isApplicationActive: { true })
+        defer { removeTemporaryDirectory(directory) }
+        let workspace = model.selectedWorkspace
+        let group = try XCTUnwrap(workspace.orderedGroups.first)
+        let firstTabID = group.selectedTabID
+        let firstSession = try XCTUnwrap(group.selectedTab.terminalSession?.id)
+        model.createTerminalTab()
+        let secondTabID = try XCTUnwrap(model.selectedWorkspace.orderedGroups.first?.selectedTabID)
+
+        let (client, collector) = try await connectDevice(to: model)
+        defer { client.disconnect(); model.remoteHost.stop() }
+
+        let filed = expectation(description: "filed")
+        collector.onNotifications = { if collector.notifications.last?.entries.isEmpty == false { filed.fulfill() } }
+        let stub = try XCTUnwrap(model.terminalSessions[firstSession] as? StubTerminalSession)
+        stub.onEvent?(.agentActivity(AgentActivityReport(agent: "claude", activity: .awaitingInput)))
+        await fulfillment(of: [filed], timeout: 10)
+
+        let read = expectation(description: "read")
+        collector.onNotifications = { if collector.notifications.last?.entries.isEmpty == true { read.fulfill() } }
+        model.closeTab(secondTabID)
+        await fulfillment(of: [read], timeout: 10)
+    }
+
     private func makeModel(
         engine: StubTerminalEngine,
         isApplicationActive: @escaping @MainActor () -> Bool

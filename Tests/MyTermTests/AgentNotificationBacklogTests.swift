@@ -135,6 +135,47 @@ final class AgentNotificationBacklogTests: XCTestCase {
         XCTAssertEqual(model.remoteNotifications()?.entries.map(\.tabID), [firstTabID.description])
     }
 
+    func testClosingTheSelectedTabReadsTheTabItLandsOn() throws {
+        let harness = try makeHarness()
+        let model = harness.model
+        let workspace = model.selectedWorkspace
+        let group = try XCTUnwrap(workspace.orderedGroups.first)
+        let firstTabID = group.selectedTabID
+        model.createTerminalTab()
+        let secondTabID = try XCTUnwrap(model.selectedWorkspace.orderedGroups.first?.selectedTabID)
+
+        harness.record(.finished, workspaceID: workspace.id, tabGroupID: group.id, tabID: firstTabID)
+        XCTAssertEqual(model.agentNotificationCount, 1)
+
+        model.closeTab(secondTabID)
+
+        XCTAssertEqual(
+            model.selectedWorkspace.orderedGroups.first?.selectedTabID,
+            firstTabID,
+            "precondition: closing the selected tab lands on the other one"
+        )
+        XCTAssertTrue(model.agentNotificationItems.isEmpty, "landing on the tab reads it, as clicking it would")
+        XCTAssertNil(model.agentAttention(forTab: firstTabID))
+    }
+
+    func testADeviceClosingATabWhileNobodyIsAtTheMacReadsNothing() throws {
+        let harness = try makeHarness()
+        let model = harness.model
+        let workspace = model.selectedWorkspace
+        let group = try XCTUnwrap(workspace.orderedGroups.first)
+        let firstTabID = group.selectedTabID
+        model.createTerminalTab()
+        let secondTabID = try XCTUnwrap(model.selectedWorkspace.orderedGroups.first?.selectedTabID)
+        harness.isApplicationActive = false
+
+        harness.record(.finished, workspaceID: workspace.id, tabGroupID: group.id, tabID: firstTabID)
+        XCTAssertTrue(model.closeTab(tabID: secondTabID.description), "precondition: the device's close is accepted")
+
+        XCTAssertEqual(model.selectedWorkspace.orderedGroups.first?.selectedTabID, firstTabID)
+        XCTAssertEqual(model.agentNotificationCount, 1, "the tab is on a screen nobody is looking at")
+        XCTAssertEqual(model.agentAttention(forTab: firstTabID), .finished)
+    }
+
     func testTheNewestNotificationComesFirst() throws {
         let harness = try makeHarness()
         let model = harness.model
