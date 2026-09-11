@@ -150,12 +150,7 @@ final class CompanionFlowTests: XCTestCase {
         let app = launch(connecting: true)
         expectConnected(app)
 
-        // A phone puts the tab bar at the bottom; an iPad puts it in the top bar, outside any
-        // `tabBars` element. The button is the same either way.
-        let latestTab = app.tabBars.buttons["Latest"].waitForExistence(timeout: 5)
-            ? app.tabBars.buttons["Latest"]
-            : app.buttons["Latest"].firstMatch
-        XCTAssertTrue(latestTab.waitForExistence(timeout: 5), "the Latest tab should be offered")
+        let latestTab = latestTab(in: app)
         snap(app, "69-workspaces-with-latest-tab")
         // The demo host files two entries on connect, and the badge counts them before the tab
         // is even opened. Only a phone's tab bar says so to accessibility; see `waitForUnread`.
@@ -193,7 +188,71 @@ final class CompanionFlowTests: XCTestCase {
         // The user reaches every tab on the Mac. The Mac's list empties; the device's history stays.
         try tellHost("read")
         XCTAssertEqual(rows.count, 3)
-        XCTAssertFalse(app.otherElements["latest.empty"].exists)
+        XCTAssertFalse(app.staticTexts["Nothing Yet"].exists)
+    }
+
+    /// A Mac with nothing waiting sends an empty backlog, which is an empty inbox and nothing
+    /// worse. The first thing to happen afterwards fills it: an empty first snapshot does not
+    /// swallow what comes next.
+    @MainActor
+    func testAnEmptyBacklogIsAnEmptyInboxUntilSomethingHappens() throws {
+        try tellHost("read")
+        defer { try? tellHost("restore") }
+        let app = launch(connecting: true)
+        expectConnected(app)
+        let latestTab = latestTab(in: app)
+        latestTab.tap()
+        XCTAssertTrue(app.navigationBars["Latest"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Nothing Yet"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "latest.row").count, 0)
+        XCTAssertFalse(app.buttons["latest.markAllRead"].isEnabled, "there is nothing to mark")
+        snap(app, "74-latest-empty")
+
+        try tellHost("notify")
+        let rows = app.buttons.matching(identifier: "latest.row")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10), "the first entry replaces the empty state")
+        XCTAssertTrue(waitForUnread(1, badge: latestTab, in: app))
+        XCTAssertFalse(app.staticTexts["Nothing Yet"].exists)
+        snap(app, "75-latest-first-entry")
+    }
+
+    /// A Mac still running a MyTerm from before the Latest tab never sends the backlog at all.
+    /// The device shows an empty inbox rather than waiting, or breaking, on a message that is
+    /// not coming, and everything else about the connection works as before.
+    @MainActor
+    func testAMacThatNeverSendsABacklogLeavesLatestEmptyRatherThanBroken() throws {
+        try tellHost("mute")
+        defer { try? tellHost("unmute") }
+        let app = launch(connecting: true)
+        expectConnected(app)
+        let latestTab = latestTab(in: app)
+        if !isPad {
+            XCTAssertNil((latestTab.value as? String).flatMap { $0.isEmpty ? nil : $0 }, "no badge without a backlog")
+        }
+        latestTab.tap()
+        XCTAssertTrue(app.navigationBars["Latest"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Nothing Yet"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "latest.row").count, 0)
+        snap(app, "76-latest-old-mac")
+
+        // The rest of the app is untouched by the missing message.
+        if app.tabBars.buttons["Workspaces"].exists {
+            app.tabBars.buttons["Workspaces"].tap()
+        } else {
+            app.buttons["Workspaces"].firstMatch.tap()
+        }
+        XCTAssertTrue(app.staticTexts["build"].firstMatch.waitForExistence(timeout: 5))
+    }
+
+    /// A phone puts the tab bar at the bottom; an iPad puts it in the top bar, outside any
+    /// `tabBars` element. The button is the same either way.
+    @MainActor
+    private func latestTab(in app: XCUIApplication) -> XCUIElement {
+        let latestTab = app.tabBars.buttons["Latest"].waitForExistence(timeout: 5)
+            ? app.tabBars.buttons["Latest"]
+            : app.buttons["Latest"].firstMatch
+        XCTAssertTrue(latestTab.waitForExistence(timeout: 5), "the Latest tab should be offered")
+        return latestTab
     }
 
     /// Unread is shown twice: as the badge on the tab, and as the dot on each row. A phone's tab
@@ -291,10 +350,16 @@ final class CompanionFlowTests: XCTestCase {
 
     // MARK: - Helpers
 
-    /// Hands the demo host a command through the file it watches. See `RemoteHostDemo`.
+    /// Hands the demo host a command through the file it watches, and waits until the host has
+    /// taken it, so what the test does next happens after the command rather than racing it.
+    /// See `RemoteHostDemo`.
     private func tellHost(_ command: String) throws {
         let path = try XCTUnwrap(environment["MYTERM_REMOTE_CONTROL_FILE"], "the demo host's control file is not set")
         try command.write(toFile: path, atomically: true, encoding: .utf8)
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline, FileManager.default.fileExists(atPath: path) {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
     }
 
     /// The terminal is a UIKit view SwiftTerm owns, and it is not reliably exposed by identifier.

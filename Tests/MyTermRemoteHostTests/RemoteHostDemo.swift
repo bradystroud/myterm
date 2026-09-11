@@ -44,7 +44,9 @@ private final class DemoDataSource: RemoteHostDataSource {
     /// Newest first, as the Mac's bell lists it. `fileNotification` and `readAll` are what the UI
     /// tests drive through the control file, standing in for an agent finishing and for the user
     /// reaching the tab on the Mac.
-    private(set) var notifications = RemoteNotifications(entries: [
+    private(set) var notifications = backlogFixture
+
+    private static let backlogFixture = RemoteNotifications(entries: [
         RemoteNotification(
             tabID: "tab-1",
             workspaceID: "workspace-1",
@@ -63,7 +65,15 @@ private final class DemoDataSource: RemoteHostDataSource {
         ),
     ])
 
-    func remoteNotifications() -> RemoteNotifications? { notifications }
+    /// Off, this host is a MyTerm from before the Latest tab: it has a backlog and never sends it.
+    var sendsBacklog = true
+
+    func remoteNotifications() -> RemoteNotifications? { sendsBacklog ? notifications : nil }
+
+    /// Puts the backlog back the way a fresh host has it, for the tests that follow.
+    func restoreBacklog() {
+        notifications = Self.backlogFixture
+    }
 
     /// The build tab's agent finished a turn just now. One entry per tab, like the Mac.
     func fileNotification() {
@@ -321,6 +331,13 @@ final class RemoteHostDemo: XCTestCase {
         case "read":
             source.readAll()
             service.broadcast(notifications: source.notifications)
+        case "restore":
+            source.restoreBacklog()
+            service.broadcast(notifications: source.notifications)
+        case "mute":
+            source.sendsBacklog = false
+        case "unmute":
+            source.sendsBacklog = true
         case let command where command.hasPrefix("agent-session "):
             // The tab's agent moved to a new session, as after `/clear`. "default" is the one
             // the environment named, so a test can put things back for the next.
