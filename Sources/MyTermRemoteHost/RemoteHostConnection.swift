@@ -245,10 +245,13 @@ final class RemoteHostConnection {
             // Following twice keeps only the newest, so a device that re-asks after a hiccup does
             // not end up with two watchers sending it the same entries.
             agentWatchers.removeValue(forKey: request.tabID)?.stop()
+            let tabID = request.tabID
             let watcher = AgentTranscriptWatcher(
-                tabID: request.tabID,
+                tabID: tabID,
                 agent: session.agent,
-                sessionID: session.sessionID,
+                // Looked up each time rather than fixed here: `/clear` gives the tab a new
+                // session, and the device should follow it rather than a file that has ended.
+                sessionID: { [weak self] in self?.dataSource?.agentSession(tabID: tabID)?.sessionID },
                 onConversation: { [weak self] conversation in
                     self?.sendControl(.agentConversation(conversation))
                 },

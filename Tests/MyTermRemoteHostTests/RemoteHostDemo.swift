@@ -163,12 +163,16 @@ private final class DemoDataSource: RemoteHostDataSource {
     /// `MYTERM_REMOTE_DEMO_AGENT_PROJECTS` the directory to look in.
     static func demoAgentSession(forTab tabID: String) -> RemoteAgentSession? {
         guard tabID == "tab-1",
-              let session = ProcessInfo.processInfo.environment["MYTERM_REMOTE_DEMO_AGENT_SESSION"],
+              let session = agentSessionOverride
+                ?? ProcessInfo.processInfo.environment["MYTERM_REMOTE_DEMO_AGENT_SESSION"],
               !session.isEmpty else {
             return nil
         }
         return RemoteAgentSession(agent: "claude", sessionID: session)
     }
+
+    /// Stands in for the hook reporting a new session, which is what `/clear` does on a real Mac.
+    static var agentSessionOverride: String?
 
     func agentSession(tabID: String) -> RemoteAgentSession? {
         Self.demoAgentSession(forTab: tabID)
@@ -317,6 +321,11 @@ final class RemoteHostDemo: XCTestCase {
         case "read":
             source.readAll()
             service.broadcast(notifications: source.notifications)
+        case let command where command.hasPrefix("agent-session "):
+            // The tab's agent moved to a new session, as after `/clear`. "default" is the one
+            // the environment named, so a test can put things back for the next.
+            let session = String(command.dropFirst("agent-session ".count))
+            DemoDataSource.agentSessionOverride = session == "default" ? nil : session
         default:
             print("DEMO_UNKNOWN_COMMAND \(command)")
         }

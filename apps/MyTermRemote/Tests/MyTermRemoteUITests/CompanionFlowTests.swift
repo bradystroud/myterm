@@ -451,3 +451,157 @@ final class AgentAnsweringTests: XCTestCase {
         try? screenshot.pngRepresentation.write(to: url)
     }
 }
+
+/// Running the agent's commands from the device.
+///
+/// Skipped unless the demo host was pointed at a transcript, as `AgentAnsweringTests` is. The
+/// transcript it expects ends on the agent's rate-limit notice after a `/model` run, so the screen
+/// has a note to render, a model to name, and a banner to offer; a second transcript, named by
+/// `MYTERM_REMOTE_AGENT_NEXT_SESSION`, is the session a `/clear` would start.
+final class AgentCommandTests: XCTestCase {
+    private let environment = ProcessInfo.processInfo.environment
+    private var host: String { environment["MYTERM_REMOTE_HOST"] ?? "localhost" }
+    private var port: String { environment["MYTERM_REMOTE_PORT"] ?? "" }
+    private var token: String { environment["MYTERM_REMOTE_TOKEN"] ?? "demotoken" }
+    private var shotsDirectory: String? { environment["MYTERM_SHOTS_DIR"] }
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        try XCTSkipIf(port.isEmpty, "Set MYTERM_REMOTE_PORT to the port a MyTerm host is listening on.")
+        try XCTSkipIf(
+            environment["MYTERM_REMOTE_AGENT_TAB"] == nil,
+            "Set MYTERM_REMOTE_AGENT_TAB to a tab the host offers a conversation for."
+        )
+    }
+
+    @MainActor
+    private func launchOnAgentTab() throws -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["MYTERM_REMOTE_RESET_STATE"] = "1"
+        app.launchArguments += [
+            "-remote.host", host,
+            "-remote.port", port,
+            "-remote.token", token,
+            "-remote.reconnectsOnLaunch", "YES",
+            "-remote.openTab", try XCTUnwrap(environment["MYTERM_REMOTE_AGENT_TAB"]),
+        ]
+        app.launch()
+        XCTAssertTrue(app.textFields["agent.reply"].waitForExistence(timeout: 25), "an agent tab should offer a reply field")
+        return app
+    }
+
+    @MainActor
+    func testALimitNoticeOffersTheSameModelMenuTheToolbarHolds() throws {
+        let app = try launchOnAgentTab()
+
+        // The command the person ran is a note, not a bubble of markup, and so is the compaction.
+        let note = app.descendants(matching: .any)["agent.localCommand"].firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 10), "a slash command should be shown as a note")
+        XCTAssertTrue(note.label.contains("Ran /model"), "the note names the command: \(note.label)")
+        XCTAssertFalse(note.label.contains("<"), "no markup reaches the screen: \(note.label)")
+        let compaction = app.descendants(matching: .any)["agent.note"].firstMatch
+        XCTAssertTrue(compaction.exists, "an automatic compaction is shown as a note")
+        XCTAssertTrue(compaction.label.contains("compacted"), compaction.label)
+        let summary = NSPredicate(format: "label BEGINSWITH 'This session is being continued'")
+        XCTAssertFalse(app.staticTexts.containing(summary).firstMatch.exists, "the compaction summary is not a message")
+
+        // The bar names the model that last answered, not the notice's placeholder.
+        let model = app.buttons["agent.model"]
+        XCTAssertTrue(model.waitForExistence(timeout: 5), "the toolbar should carry the model")
+        XCTAssertTrue(model.label.contains("Fable 5.1"), "the model is the last one that answered: \(model.label)")
+
+        XCTAssertTrue(app.otherElements["agent.notice"].waitForExistence(timeout: 5), "the limit notice should be offered a way on")
+        snap("70-limit-notice")
+
+        app.buttons["agent.noticeAction"].tap()
+        let opus = app.buttons["Opus 5"]
+        XCTAssertTrue(opus.waitForExistence(timeout: 5), "the banner opens the model list")
+        XCTAssertTrue(app.buttons["Opus 5 (1M)"].exists, "the larger window is offered too")
+        snap("71-model-menu")
+
+        // Choosing types `/model opus` into the tab through the reply path. This host's tab is a
+        // plain shell, so what is checked here is that the choice was sent without a refusal.
+        opus.tap()
+        XCTAssertFalse(app.staticTexts["refusal.message"].waitForExistence(timeout: 3), "the command should be accepted")
+        snap("72-model-chosen")
+    }
+
+    @MainActor
+    func testTheCommandSheetRunsACommandAndSaysWhereItsAnswerWent() throws {
+        let app = try launchOnAgentTab()
+
+        app.buttons["agent.openCommands"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["agent.commands"].firstMatch.waitForExistence(timeout: 5), "the slash button opens the command list")
+        for name in ["/clear", "/compact", "/model", "/status"] {
+            XCTAssertTrue(app.descendants(matching: .any)["agent.command.\(name)"].firstMatch.exists, "\(name) should be offered")
+        }
+        XCTAssertFalse(app.descendants(matching: .any)["agent.command./resume"].firstMatch.exists, "a picker command is not offered")
+        snap("73-command-sheet")
+
+        // `/status` draws only on the Mac's screen, verified against the CLI, so the phone says so.
+        app.descendants(matching: .any)["agent.command./status"].firstMatch.tap()
+        XCTAssertTrue(app.otherElements["agent.screenNotice"].waitForExistence(timeout: 5), "a screen-only command says where its answer is")
+        XCTAssertFalse(app.staticTexts["refusal.message"].exists, "the command should be accepted")
+        snap("74-shown-on-mac")
+        app.buttons["agent.screenNotice.terminal"].tap()
+        XCTAssertTrue(app.buttons["agent.toggleTerminal"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["agent.toggleTerminal"].label, "Conversation", "the bar's button leads to the terminal")
+    }
+
+    @MainActor
+    func testTypingAPickerCommandWarnsThatItOpensOnTheMac() throws {
+        let app = try launchOnAgentTab()
+
+        let reply = app.textFields["agent.reply"]
+        reply.tap()
+        reply.typeText("/")
+        // The first character opened the sheet. Dismissing it leaves the slash to type on from.
+        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5), "typing a slash opens the command list")
+        app.buttons["Cancel"].tap()
+        reply.tap()
+        reply.typeText("resume")
+        app.buttons["agent.send"].tap()
+
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5), "a command that opens on the Mac is not sent blind")
+        XCTAssertTrue(app.alerts.firstMatch.label.contains("Mac"), app.alerts.firstMatch.label)
+        snap("75-opens-on-mac")
+        app.alerts.buttons["Cancel"].tap()
+    }
+
+    @MainActor
+    func testANewSessionReplacesTheConversation() throws {
+        let next = try XCTUnwrap(environment["MYTERM_REMOTE_AGENT_NEXT_SESSION"], "the session a /clear starts")
+        let app = try launchOnAgentTab()
+        XCTAssertTrue(app.descendants(matching: .any)["agent.localCommand"].firstMatch.waitForExistence(timeout: 10))
+
+        // What a real Mac does after `/clear`: the hook reports the new session, and the host
+        // follows its file instead of the one that has ended.
+        try tellHost("agent-session \(next)")
+        defer { try? tellHost("agent-session default") }
+
+        let fresh = app.descendants(matching: .any)["agent.localCommand"].firstMatch
+        let isNewSession = NSPredicate(format: "label CONTAINS 'New session'")
+        let expectation = XCTNSPredicateExpectation(predicate: isNewSession, object: fresh)
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation], timeout: 10), .completed, "the new session's first row is the /clear that started it")
+        XCTAssertFalse(app.staticTexts["Fix the failing build on the companion branch"].exists, "the ended session is gone")
+        XCTAssertFalse(app.otherElements["agent.notice"].exists, "the old session's notice does not carry over")
+        snap("76-new-session")
+    }
+
+    private func tellHost(_ command: String) throws {
+        let path = try XCTUnwrap(environment["MYTERM_REMOTE_CONTROL_FILE"], "the demo host's control file is not set")
+        try command.write(toFile: path, atomically: true, encoding: .utf8)
+    }
+
+    @MainActor
+    private func snap(_ name: String) {
+        let screenshot = XCUIScreen.main.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        guard let shotsDirectory else { return }
+        let url = URL(fileURLWithPath: shotsDirectory).appendingPathComponent("\(name).png")
+        try? screenshot.pngRepresentation.write(to: url)
+    }
+}

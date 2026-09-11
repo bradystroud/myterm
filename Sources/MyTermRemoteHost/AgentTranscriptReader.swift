@@ -80,7 +80,7 @@ public struct AgentTranscriptReader {
                 title = name
             }
             guard let entry = Self.entry(from: object, pending: &pending) else { continue }
-            entries.append(entry)
+            Self.append(entry, to: &entries)
         }
 
         entries = Self.markPending(in: entries, pending: pending)
@@ -100,6 +100,43 @@ public struct AgentTranscriptReader {
         guard let object = Self.object(from: line) else { return nil }
         var pending = PendingTools()
         return Self.entry(from: object, pending: &pending)
+    }
+
+    /// The lines that arrived together, for the tail.
+    ///
+    /// Read as a batch rather than one at a time because a local command and what it printed are
+    /// two lines that belong to one row. The agent writes both in the same instant, so they arrive
+    /// in the same read.
+    public func entries(from lines: [String]) -> [RemoteAgentEntry] {
+        var entries: [RemoteAgentEntry] = []
+        var pending = PendingTools()
+        for line in lines {
+            guard let object = Self.object(from: line),
+                  let entry = Self.entry(from: object, pending: &pending) else {
+                continue
+            }
+            Self.append(entry, to: &entries)
+        }
+        return entries
+    }
+
+    /// Appends an entry, folding a local command's output into the command that produced it.
+    ///
+    /// Shown apart, "Ran /model" and "Set model to Opus 5" read as two events. The output keeps
+    /// the command's identifier, so a device that already holds the command is sent nothing new
+    /// for its output.
+    static func append(_ entry: RemoteAgentEntry, to entries: inout [RemoteAgentEntry]) {
+        if case .localCommand(let output)? = entry.blocks.first, output.name.isEmpty,
+           let last = entries.last, case .localCommand(var command)? = last.blocks.first,
+           !command.name.isEmpty {
+            // The first output fills an empty row. A readable copy filed after the one drawn for
+            // the terminal replaces it: `/context` writes its grid, then its markdown.
+            command.output = output.output
+            command.isError = output.isError
+            entries[entries.count - 1].blocks = [.localCommand(command)]
+            return
+        }
+        entries.append(entry)
     }
 
     /// The name the agent gave the conversation, when a line carries one.
@@ -136,13 +173,46 @@ public struct AgentTranscriptReader {
     }
 
     private static func entry(from object: [String: Any], pending: inout PendingTools) -> RemoteAgentEntry? {
-        guard let type = object["type"] as? String,
-              let role = RemoteAgentRole(rawValue: type),
+        // The identifier is the agent's own, so a device that reattaches recognises what it has.
+        guard let id = object["uuid"] as? String, !id.isEmpty,
+              let type = object["type"] as? String else {
+            return nil
+        }
+        let timestamp = timestamp(from: object["timestamp"])
+
+        if type == "system" {
+            guard let block = systemBlock(from: object) else { return nil }
+            return RemoteAgentEntry(id: id, role: .system, timestamp: timestamp, blocks: [block])
+        }
+
+        guard let role = RemoteAgentRole(rawValue: type), role != .system,
               let message = object["message"] as? [String: Any] else {
             return nil
         }
-        // The identifier is the agent's own, so a device that reattaches recognises what it has.
-        guard let id = object["uuid"] as? String, !id.isEmpty else { return nil }
+        if role == .user, let content = message["content"] as? String {
+            // A command run in the agent's own interface. Older agents file it as a user turn
+            // wrapped in markup; newer ones as a system record carrying the same markup.
+            if LocalCommandMarkup.wraps(content) {
+                guard let command = localCommand(from: content) else { return nil }
+                return RemoteAgentEntry(id: id, role: .system, timestamp: timestamp, blocks: [.localCommand(command)])
+            }
+            // The summary written in the person's name after a compaction, and reminders the
+            // agent leaves for itself. Neither is something the person said.
+            if object["isCompactSummary"] as? Bool == true
+                || content.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<system-reminder>") {
+                return nil
+            }
+            // The readable copy of a command's output, filed in the person's name for the agent
+            // to read. It belongs to the command, and `append` gives it to it.
+            if object["isMeta"] as? Bool == true {
+                let text = presentable(content)
+                guard !text.isEmpty else { return nil }
+                return RemoteAgentEntry(
+                    id: id, role: .system, timestamp: timestamp,
+                    blocks: [.localCommand(RemoteAgentLocalCommand(name: "", output: text))]
+                )
+            }
+        }
 
         let blocks = self.blocks(from: message["content"], pending: &pending)
         guard !blocks.isEmpty else { return nil }
@@ -150,9 +220,102 @@ public struct AgentTranscriptReader {
         return RemoteAgentEntry(
             id: id,
             role: role,
-            timestamp: timestamp(from: object["timestamp"]),
-            blocks: blocks
+            timestamp: timestamp,
+            blocks: blocks,
+            model: role == .assistant ? model(from: message) : nil
         )
+    }
+
+    /// The model an assistant turn came from, if it came from one at all.
+    private static func model(from message: [String: Any]) -> String? {
+        guard let model = nonEmpty(message["model"] as? String),
+              model != AgentModelCatalog.syntheticModel else {
+            return nil
+        }
+        return model
+    }
+
+    // MARK: - System records
+
+    /// What a system record is worth telling a person, if anything.
+    ///
+    /// Most are bookkeeping: hook summaries, turn timings, API retries. The ones kept are the ones
+    /// that change what the conversation means: a command the person ran, a compaction, a model
+    /// swapped for another, a connection lost.
+    private static func systemBlock(from object: [String: Any]) -> RemoteAgentBlock? {
+        let content = nonEmpty(object["content"] as? String)
+        switch object["subtype"] as? String {
+        case "local_command":
+            guard let content, let command = localCommand(from: content) else { return nil }
+            return .localCommand(command)
+        case "compact_boundary":
+            // A manual compaction is already shown by the `/compact` command that follows it.
+            let metadata = object["compactMetadata"] as? [String: Any]
+            guard metadata?["trigger"] as? String != "manual" else { return nil }
+            return .note(RemoteAgentNote(text: content ?? "Conversation compacted"))
+        case "informational", "model_refusal_fallback":
+            guard let content else { return nil }
+            let level: RemoteAgentNote.Level = object["level"] as? String == "warning" ? .warning : .info
+            return .note(RemoteAgentNote(text: presentable(content), level: level))
+        default:
+            return nil
+        }
+    }
+
+    // MARK: - Local commands
+
+    /// The markup the agent wraps a local command in. Each record carries exactly one of these.
+    enum LocalCommandMarkup {
+        static let caveat = "local-command-caveat"
+        static let name = "command-name"
+        static let args = "command-args"
+        static let stdout = "local-command-stdout"
+        static let stderr = "local-command-stderr"
+
+        static func wraps(_ content: String) -> Bool {
+            let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            return [caveat, name, stdout, stderr].contains { trimmed.hasPrefix("<\($0)>") }
+        }
+    }
+
+    /// What a local command record says, or nothing for the caveat.
+    ///
+    /// The caveat is the agent telling itself not to answer what follows. It is the same words
+    /// every time and it is addressed to the agent, so no device is shown it.
+    static func localCommand(from content: String) -> RemoteAgentLocalCommand? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("<\(LocalCommandMarkup.caveat)>") {
+            return nil
+        }
+        if let name = tagged(LocalCommandMarkup.name, in: trimmed) {
+            guard !name.isEmpty else { return nil }
+            return RemoteAgentLocalCommand(name: name, args: tagged(LocalCommandMarkup.args, in: trimmed) ?? "")
+        }
+        if let output = tagged(LocalCommandMarkup.stdout, in: trimmed) {
+            let text = presentable(output)
+            return text.isEmpty ? nil : RemoteAgentLocalCommand(name: "", output: text)
+        }
+        if let output = tagged(LocalCommandMarkup.stderr, in: trimmed) {
+            let text = presentable(output)
+            return text.isEmpty ? nil : RemoteAgentLocalCommand(name: "", output: text, isError: true)
+        }
+        return nil
+    }
+
+    private static func tagged(_ tag: String, in text: String) -> String? {
+        guard let open = text.range(of: "<\(tag)>"),
+              let close = text.range(of: "</\(tag)>", range: open.upperBound..<text.endIndex) else {
+            return nil
+        }
+        return text[open.upperBound..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Command output as words. The agent styles it for its own screen with terminal escapes,
+    /// and a device has no terminal to interpret them.
+    static func presentable(_ output: String) -> String {
+        let plain = output.replacing(/\u{1B}\[[0-9;?]*[ -\/]*[@-~]/, with: "")
+        return cut(plain.trimmingCharacters(in: .whitespacesAndNewlines),
+                   to: RemoteAgentLimits.maximumBlockCharacters).text
     }
 
     /// The agent writes fractional seconds. A parser without that option returns nothing for every
@@ -362,6 +525,10 @@ public struct AgentTranscriptReader {
                 return total + result.text.count
             case .image:
                 return total + 16
+            case .localCommand(let command):
+                return total + command.name.count + command.args.count + command.output.count
+            case .note(let note):
+                return total + note.text.count
             }
         }
     }

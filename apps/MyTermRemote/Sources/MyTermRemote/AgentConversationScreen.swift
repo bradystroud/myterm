@@ -17,6 +17,12 @@ struct AgentConversationScreen: View {
     @State private var isShowingTerminal = false
     @State private var draft = ""
     @FocusState private var isWritingReply: Bool
+    @State private var isShowingCommands = false
+    /// A typed command that would open something on the Mac, held until the person confirms.
+    @State private var macOnlyCommand: AgentCommandCatalog.Command?
+    /// The last command whose answer went to the Mac's screen, for the bar that says so.
+    @State private var screenCommand: AgentCommandCatalog.Command?
+    @State private var screenCommandTimer: Task<Void, Never>?
 
     var body: some View {
         Group {
@@ -28,7 +34,21 @@ struct AgentConversationScreen: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if !isShowingTerminal, let conversation = followedConversation {
+                    Menu {
+                        AgentModelChoices(current: conversation.currentModel) { choice in
+                            send(AgentCommandCatalog.command(named: "/model")?.line(with: choice.argument) ?? choice.command)
+                        }
+                    } label: {
+                        // Text rather than a Label: the bar draws a Label as its icon alone, and
+                        // the name is the whole point of this item.
+                        Text(modelLabel(for: conversation))
+                            .font(.subheadline.weight(.medium))
+                    }
+                    .disabled(!canSendCommands)
+                    .accessibilityIdentifier("agent.model")
+                }
                 Button(isShowingTerminal ? "Conversation" : "Terminal",
                        systemImage: isShowingTerminal ? "bubble.left.and.bubble.right" : "terminal") {
                     isShowingTerminal.toggle()
@@ -38,11 +58,81 @@ struct AgentConversationScreen: View {
         }
         .onAppear { store.followConversation(tabID: tab.id) }
         .onDisappear { store.stopFollowingConversation(tabID: tab.id) }
+        .sheet(isPresented: $isShowingCommands) {
+            AgentCommandSheet(run: { command, argument in send(command.line(with: argument)) },
+                              currentModel: followedConversation?.currentModel)
+                .presentationDetents([.large])
+        }
+        .alert(
+            "This opens on your Mac",
+            isPresented: Binding(get: { macOnlyCommand != nil }, set: { if !$0 { macOnlyCommand = nil } }),
+            presenting: macOnlyCommand
+        ) { command in
+            Button("Send anyway") { deliver(command.name); draft = "" }
+            Button("Open terminal") { isShowingTerminal = true }
+            Button("Cancel", role: .cancel) {}
+        } message: { command in
+            Text("\(command.name) \(command.description.prefix(1).lowercased())\(command.description.dropFirst()). The phone cannot show it; the terminal can.")
+        }
+    }
+
+    /// Commands type into the tab, so they are gated as the composer is, and they go nowhere
+    /// while the agent is stopped on a permission prompt.
+    private var canSendCommands: Bool {
+        store.client.allowsMutation && store.promptOptions.isEmpty
+    }
+
+    /// One line into the tab, whatever produced it: the reply field, the sheet, a banner.
+    ///
+    /// The catalog says what to expect afterwards, and that decides what the phone does: warn
+    /// before a command that opens on the Mac, or say where the answer went when it cannot be
+    /// read back from the transcript.
+    /// Returns whether the line went, so a field can keep a draft the person has yet to confirm.
+    @discardableResult
+    private func send(_ line: String) -> Bool {
+        switch AgentCommandCatalog.typed(line) {
+        case .macOnly(let command):
+            macOnlyCommand = command
+            return false
+        case .runnable(let command):
+            deliver(line)
+            if command.outcome == .screen { showScreenNotice(for: command) }
+            return true
+        case .message, .unknown:
+            deliver(line)
+            return true
+        }
+    }
+
+    private func deliver(_ line: String) {
+        store.reply(tabID: tab.id, text: line)
+    }
+
+    private func showScreenNotice(for command: AgentCommandCatalog.Command) {
+        screenCommand = command
+        screenCommandTimer?.cancel()
+        screenCommandTimer = Task {
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled else { return }
+            screenCommand = nil
+        }
+    }
+
+    /// The store's conversation, when it is this tab's. A late one for a tab the person has left is
+    /// not shown under this tab's name.
+    private var followedConversation: RemoteAgentConversation? {
+        guard let conversation = store.conversation, conversation.tabID == tab.id else { return nil }
+        return conversation
+    }
+
+    /// What the toolbar calls the model. "Model" until an answer has named one.
+    private func modelLabel(for conversation: RemoteAgentConversation) -> String {
+        conversation.currentModel.flatMap(AgentModelCatalog.label(forModel:)) ?? "Model"
     }
 
     @ViewBuilder
     private var conversation: some View {
-        if let conversation = store.conversation, conversation.tabID == tab.id {
+        if let conversation = followedConversation {
             entries(of: conversation)
                 .navigationTitle(conversation.title ?? tab.title)
                 .navigationBarTitleDisplayMode(.inline)
@@ -96,6 +186,30 @@ struct AgentConversationScreen: View {
     /// not reading a reply, so a text field there would take something that goes nowhere.
     @ViewBuilder
     private var composer: some View {
+        VStack(spacing: 0) {
+            if let conversation = followedConversation,
+               let notice = AgentCommandCatalog.notice(in: conversation.entries) {
+                AgentNoticeBanner(
+                    notice: notice,
+                    currentModel: conversation.currentModel,
+                    isEnabled: canSendCommands,
+                    run: { send($0) },
+                    openTerminal: { isShowingTerminal = true }
+                )
+            }
+            if let screenCommand {
+                AgentScreenNoticeBar(
+                    command: screenCommand,
+                    openTerminal: { self.screenCommand = nil; isShowingTerminal = true },
+                    dismiss: { self.screenCommand = nil }
+                )
+            }
+            input
+        }
+    }
+
+    @ViewBuilder
+    private var input: some View {
         if !store.client.allowsMutation {
             Label("View only. Typing is turned off on the Mac.", systemImage: "eye")
                 .font(.footnote)
@@ -107,7 +221,12 @@ struct AgentConversationScreen: View {
         } else if !store.promptOptions.isEmpty {
             AgentPromptBar(tab: tab, store: store)
         } else {
-            AgentReplyBar(tab: tab, store: store, draft: $draft, isWriting: $isWritingReply)
+            AgentReplyBar(
+                draft: $draft,
+                isWriting: $isWritingReply,
+                send: send,
+                openCommands: { isShowingCommands = true }
+            )
         }
     }
 
@@ -229,15 +348,25 @@ private struct AgentPromptBar: View {
     }
 }
 
-/// Saying something to the agent.
+/// Saying something to the agent, or running one of its commands.
+///
+/// A "/" opens the command list, from the button or as the first character typed, because the
+/// commands are the one thing a person cannot be expected to remember on a phone.
 private struct AgentReplyBar: View {
-    let tab: RemoteTab
-    let store: RemoteSessionStore
     @Binding var draft: String
     @FocusState.Binding var isWriting: Bool
+    let send: (String) -> Bool
+    let openCommands: () -> Void
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            Button(action: openCommands) {
+                Image(systemName: "slash.circle")
+                    .font(.title2)
+            }
+            .accessibilityLabel("Commands")
+            .accessibilityIdentifier("agent.openCommands")
+
             // Grows with what is written, up to a point: a phone reply is often a sentence, and a
             // single line hides most of it.
             TextField("Reply to your agent", text: $draft, axis: .vertical)
@@ -250,7 +379,7 @@ private struct AgentReplyBar: View {
                 .accessibilityIdentifier("agent.reply")
 
             Button {
-                store.reply(tabID: tab.id, text: draft)
+                guard send(draft) else { return }
                 draft = ""
                 isWriting = false
             } label: {
@@ -264,6 +393,10 @@ private struct AgentReplyBar: View {
         .padding(.vertical, 8)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+        .onChange(of: draft) { previous, current in
+            // Only as the first character, so a path or a fraction typed later does not interrupt.
+            if current == "/", previous.isEmpty { openCommands() }
+        }
     }
 }
 
@@ -290,10 +423,69 @@ private struct AgentEntryView: View {
                     Label("Image", systemImage: "photo")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                case .localCommand(let command):
+                    AgentLocalCommandView(command: command)
+                case .note(let note):
+                    AgentNoteView(note: note)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A command the person ran in the agent's own interface, such as `/model`.
+///
+/// It is not something said to the agent, so it does not get a bubble. It reads like the note a
+/// messaging app leaves when a setting changes: centred, small, and out of the way of the talk.
+private struct AgentLocalCommandView: View {
+    let command: RemoteAgentLocalCommand
+
+    var body: some View {
+        VStack(spacing: 3) {
+            if let note = AgentCommandCatalog.note(for: command) {
+                // The phone's own words for what happened, in place of a line the CLI wrote for
+                // its screen.
+                Text(note)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            } else {
+                if !command.name.isEmpty {
+                    Text(ran)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                if !command.output.isEmpty {
+                    output
+                }
+            }
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("agent.localCommand")
+    }
+
+    /// A line is centred under the command. A report, such as `/context`'s, reads as a block.
+    @ViewBuilder
+    private var output: some View {
+        if command.output.contains("\n") {
+            AgentMarkdownView(text: command.output)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(10)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        } else {
+            Text(command.output)
+                .font(.caption)
+                .foregroundStyle(command.isError ? Color.red : .secondary)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var ran: String {
+        command.args.isEmpty ? "Ran \(command.name)" : "Ran \(command.name) \(command.args)"
     }
 }
 

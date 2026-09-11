@@ -20,7 +20,12 @@ public final class AgentTranscriptWatcher {
 
     public let tabID: String
     public let agent: String
-    private let sessionID: String
+    /// Asked on every poll, because the session a tab is running can change under a watcher:
+    /// `/clear` starts a new session, the hook reports its identifier, and the old file goes
+    /// quiet for good. Following the new one is what keeps the device from showing a
+    /// conversation that has ended.
+    private let currentSessionID: @MainActor () -> String?
+    private var sessionID: String?
     private let projectsDirectory: URL
     private let reader = AgentTranscriptReader()
 
@@ -36,17 +41,36 @@ public final class AgentTranscriptWatcher {
     public init(
         tabID: String,
         agent: String,
-        sessionID: String,
+        sessionID: @escaping @MainActor () -> String?,
         projectsDirectory: URL = AgentTranscriptWatcher.defaultProjectsDirectory,
         onConversation: @escaping @MainActor (RemoteAgentConversation) -> Void,
         onEntries: @escaping @MainActor (RemoteAgentEntries) -> Void
     ) {
         self.tabID = tabID
         self.agent = agent
-        self.sessionID = sessionID
+        self.currentSessionID = sessionID
         self.projectsDirectory = projectsDirectory
         self.onConversation = onConversation
         self.onEntries = onEntries
+    }
+
+    /// A watcher for one fixed session.
+    public convenience init(
+        tabID: String,
+        agent: String,
+        sessionID: String,
+        projectsDirectory: URL = AgentTranscriptWatcher.defaultProjectsDirectory,
+        onConversation: @escaping @MainActor (RemoteAgentConversation) -> Void,
+        onEntries: @escaping @MainActor (RemoteAgentEntries) -> Void
+    ) {
+        self.init(
+            tabID: tabID,
+            agent: agent,
+            sessionID: { sessionID },
+            projectsDirectory: projectsDirectory,
+            onConversation: onConversation,
+            onEntries: onEntries
+        )
     }
 
     deinit {
@@ -75,7 +99,16 @@ public final class AgentTranscriptWatcher {
     private func follow() async {
         var sentBacklog = false
         while !Task.isCancelled {
-            if let url = Self.locate(sessionID: sessionID, projectsDirectory: projectsDirectory) {
+            let session = currentSessionID()
+            if session != sessionID {
+                // A new session is a new file, and nothing remembered about the old one applies.
+                sessionID = session
+                sentBacklog = false
+                offset = 0
+                delivered = []
+                title = nil
+            }
+            if let session, let url = Self.locate(sessionID: session, projectsDirectory: projectsDirectory) {
                 if !sentBacklog {
                     await sendBacklog(at: url)
                     sentBacklog = true
@@ -112,12 +145,13 @@ public final class AgentTranscriptWatcher {
         offset = read.length
         guard !read.lines.isEmpty else { return }
 
-        var fresh: [RemoteAgentEntry] = []
         for line in read.lines {
             if let name = reader.title(from: line), name != title {
                 title = name
             }
-            guard let entry = reader.entry(from: line), !delivered.contains(entry.id) else { continue }
+        }
+        var fresh: [RemoteAgentEntry] = []
+        for entry in reader.entries(from: read.lines) where !delivered.contains(entry.id) {
             delivered.insert(entry.id)
             fresh.append(entry)
         }

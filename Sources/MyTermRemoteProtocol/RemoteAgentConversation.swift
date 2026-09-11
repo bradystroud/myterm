@@ -51,6 +51,9 @@ public struct RemoteAgentEntries: Codable, Equatable, Sendable {
 public enum RemoteAgentRole: String, Codable, Equatable, Sendable {
     case user
     case assistant
+    /// Neither side of the talk: a command the person ran in the agent's interface, or a note
+    /// from the agent's own machinery.
+    case system
 }
 
 /// One turn, identified by the agent's own entry identifier so a device can drop a repeat.
@@ -62,12 +65,70 @@ public struct RemoteAgentEntry: Codable, Equatable, Sendable, Identifiable {
     public var role: RemoteAgentRole
     public var timestamp: Date?
     public var blocks: [RemoteAgentBlock]
+    /// The model that produced an assistant turn, as the agent names it (`claude-opus-5`). Absent
+    /// on a person's turn, and on a turn the agent marks as synthetic: a rate-limit notice is
+    /// written as an assistant message, and it says nothing about which model is in use.
+    public var model: String?
 
-    public init(id: String, role: RemoteAgentRole, timestamp: Date? = nil, blocks: [RemoteAgentBlock]) {
+    public init(
+        id: String,
+        role: RemoteAgentRole,
+        timestamp: Date? = nil,
+        blocks: [RemoteAgentBlock],
+        model: String? = nil
+    ) {
         self.id = id
         self.role = role
         self.timestamp = timestamp
         self.blocks = blocks
+        self.model = model
+    }
+}
+
+extension RemoteAgentConversation {
+    /// The model the agent last answered with. Carried on each turn rather than on the
+    /// conversation, so it follows the tail without a message of its own.
+    public var currentModel: String? {
+        entries.last { $0.model != nil }?.model
+    }
+}
+
+/// A note from the agent's own machinery rather than either side of the talk: the conversation
+/// was compacted, a model was swapped for another, a connection dropped.
+public struct RemoteAgentNote: Codable, Equatable, Sendable {
+    public enum Level: String, Codable, Equatable, Sendable {
+        case info
+        case warning
+    }
+
+    public var text: String
+    public var level: Level
+
+    public init(text: String, level: Level = .info) {
+        self.text = text
+        self.level = level
+    }
+}
+
+/// A command the person ran in the agent's own interface, such as `/model` or `/clear`.
+///
+/// The agent records these as user turns wrapped in markup and tells itself not to answer them.
+/// They are not something the person said to the agent, so a device shows them as a note of what
+/// was done rather than as a message bubble.
+public struct RemoteAgentLocalCommand: Codable, Equatable, Sendable {
+    /// The command as typed, slash included. Empty when only the output could be read.
+    public var name: String
+    public var args: String
+    /// What the command printed, with the agent's terminal styling stripped. Often empty.
+    public var output: String
+    /// True when the output came from the command's error stream.
+    public var isError: Bool
+
+    public init(name: String, args: String = "", output: String = "", isError: Bool = false) {
+        self.name = name
+        self.args = args
+        self.output = output
+        self.isError = isError
     }
 }
 
@@ -157,13 +218,17 @@ public enum RemoteAgentBlock: Codable, Equatable, Sendable {
     /// An image the conversation carried. The bytes stay on the Mac: a device is told one was
     /// there, which is enough to explain a gap, and nothing is spent sending it.
     case image
+    /// A command run in the agent's interface, not a message to it.
+    case localCommand(RemoteAgentLocalCommand)
+    /// A note from the agent's machinery, not a message from it.
+    case note(RemoteAgentNote)
 
     private enum Kind: String, Codable {
-        case text, thinking, toolUse, toolResult, image
+        case text, thinking, toolUse, toolResult, image, localCommand, note
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, text, thinking, toolUse, toolResult
+        case type, text, thinking, toolUse, toolResult, localCommand, note
     }
 
     public init(from decoder: Decoder) throws {
@@ -179,6 +244,10 @@ public enum RemoteAgentBlock: Codable, Equatable, Sendable {
             self = .toolResult(try container.decode(RemoteAgentToolResult.self, forKey: .toolResult))
         case .image:
             self = .image
+        case .localCommand:
+            self = .localCommand(try container.decode(RemoteAgentLocalCommand.self, forKey: .localCommand))
+        case .note:
+            self = .note(try container.decode(RemoteAgentNote.self, forKey: .note))
         }
     }
 
@@ -199,6 +268,12 @@ public enum RemoteAgentBlock: Codable, Equatable, Sendable {
             try container.encode(value, forKey: .toolResult)
         case .image:
             try container.encode(Kind.image, forKey: .type)
+        case .localCommand(let value):
+            try container.encode(Kind.localCommand, forKey: .type)
+            try container.encode(value, forKey: .localCommand)
+        case .note(let value):
+            try container.encode(Kind.note, forKey: .type)
+            try container.encode(value, forKey: .note)
         }
     }
 }

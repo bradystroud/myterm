@@ -346,4 +346,43 @@ final class RemoteProtocolTests: XCTestCase {
         }
         XCTAssertNil(request.title)
     }
+
+    // MARK: - Agent conversations
+
+    /// The block enum's `Codable` is hand-written, so a case added without teaching it fails only
+    /// on the wire. Sending one of every kind through catches that here.
+    func testEveryKindOfConversationBlockSurvivesTheWire() throws {
+        let blocks: [RemoteAgentBlock] = [
+            .text("hello"),
+            .thinking("hmm"),
+            .toolUse(RemoteAgentToolUse(id: "t1", name: "Bash", summary: "ls", detail: "command: ls", isPending: true)),
+            .toolResult(RemoteAgentToolResult(toolUseID: "t1", isError: false, text: "a b", isTruncated: true)),
+            .image,
+            .localCommand(RemoteAgentLocalCommand(name: "/model", args: "opus", output: "Set model to Opus 5")),
+            .localCommand(RemoteAgentLocalCommand(name: "", output: "no such command", isError: true)),
+            .note(RemoteAgentNote(text: "Conversation compacted")),
+            .note(RemoteAgentNote(text: "Switched to Opus 4.8.", level: .warning)),
+        ]
+        let message = RemoteControlMessage.agentConversation(RemoteAgentConversation(
+            tabID: "tab-1",
+            title: "fixing the build",
+            agent: "claude",
+            entries: [
+                RemoteAgentEntry(id: "e1", role: .system, blocks: blocks),
+                RemoteAgentEntry(id: "e2", role: .assistant, blocks: [.text("ok")], model: "claude-opus-5"),
+                RemoteAgentEntry(id: "e3", role: .user, blocks: [.text("thanks")]),
+            ]
+        ))
+
+        let decoded = try RemoteControlCodec.decode(RemoteControlCodec.encode(message))
+
+        XCTAssertEqual(decoded, message)
+    }
+
+    /// A model is only ever an assistant turn's; an entry from before the field existed still reads.
+    func testAnEntryWithoutAModelStillDecodes() throws {
+        let json = #"{"id":"e1","role":"user","blocks":[{"type":"text","text":"hi"}]}"#
+        let entry = try JSONDecoder().decode(RemoteAgentEntry.self, from: Data(json.utf8))
+        XCTAssertNil(entry.model)
+    }
 }
