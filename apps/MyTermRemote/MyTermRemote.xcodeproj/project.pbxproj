@@ -13,6 +13,7 @@
 		32192EA4DE201E1542B0FF82 /* AgentChefBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CF533AC2787D77178C186C5 /* AgentChefBadge.swift */; };
 		40A91B025DA9942EE0BCCE97 /* AgentChefIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF67B826E451A2CE4BE9B0F3 /* AgentChefIcon.swift */; };
 		4A7CB9F1E51225C945B36FB5 /* AgentConversationScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55BC19E9AE1D31F51D6B5293 /* AgentConversationScreen.swift */; };
+		57734CEB96B1DCC41982B486 /* AgentCommandSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 993DC1858E350F207D3EB9F3 /* AgentCommandSheet.swift */; };
 		6214EC90828D10FAD089B23C /* MyTermRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 002D1BFC91AEA812553D6AE8 /* MyTermRemoteApp.swift */; };
 		88E7472C1E51D8B6DB8B4623 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = BBA0559FDC2B96087B8BC54A /* SwiftTerm */; };
 		8BFBAD7F0B301F8301FE33C3 /* RemoteSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBD88D365BF17A04A182AA51 /* RemoteSplitView.swift */; };
@@ -46,11 +47,12 @@
 		546283DE055358C085A8B84E /* BrowserTabScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserTabScreen.swift; sourceTree = "<group>"; };
 		55BC19E9AE1D31F51D6B5293 /* AgentConversationScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConversationScreen.swift; sourceTree = "<group>"; };
 		5966FA3D426CFBF3EAD379E6 /* PairingCodeScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingCodeScannerView.swift; sourceTree = "<group>"; };
-		65DBC6401A1991E834206720 /* remote-companion-foundations */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "remote-companion-foundations"; path = ../..; sourceTree = SOURCE_ROOT; };
 		69B18F142646855B8A51891B /* MacBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBrowser.swift; sourceTree = "<group>"; };
 		78433D720F06C8526EACE249 /* MyTermRemoteUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = MyTermRemoteUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		993DC1858E350F207D3EB9F3 /* AgentCommandSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCommandSheet.swift; sourceTree = "<group>"; };
 		A01CC9C6560EA5456BF5A241 /* CompanionFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionFlowTests.swift; sourceTree = "<group>"; };
 		BF67B826E451A2CE4BE9B0F3 /* AgentChefIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentChefIcon.swift; sourceTree = "<group>"; };
+		D5E785E23B44702B7E91EC8B /* agent-ade836332b4002e6d */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "agent-ade836332b4002e6d"; path = ../..; sourceTree = SOURCE_ROOT; };
 		DBD88D365BF17A04A182AA51 /* RemoteSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSplitView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -73,6 +75,7 @@
 			children = (
 				3CF533AC2787D77178C186C5 /* AgentChefBadge.swift */,
 				BF67B826E451A2CE4BE9B0F3 /* AgentChefIcon.swift */,
+				993DC1858E350F207D3EB9F3 /* AgentCommandSheet.swift */,
 				55BC19E9AE1D31F51D6B5293 /* AgentConversationScreen.swift */,
 				546283DE055358C085A8B84E /* BrowserTabScreen.swift */,
 				1D76A051C944D2431A9BA086 /* ConnectionView.swift */,
@@ -100,7 +103,7 @@
 		88B1905F4CDF78C95F45B72F /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				65DBC6401A1991E834206720 /* remote-companion-foundations */,
+				D5E785E23B44702B7E91EC8B /* agent-ade836332b4002e6d */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -217,6 +220,7 @@
 			files = (
 				32192EA4DE201E1542B0FF82 /* AgentChefBadge.swift in Sources */,
 				40A91B025DA9942EE0BCCE97 /* AgentChefIcon.swift in Sources */,
+				57734CEB96B1DCC41982B486 /* AgentCommandSheet.swift in Sources */,
 				4A7CB9F1E51225C945B36FB5 /* AgentConversationScreen.swift in Sources */,
 				2E94FB385C32C9213E0B7D9D /* BrowserTabScreen.swift in Sources */,
 				DD213E5B2D6FF5D043416776 /* ConnectionView.swift in Sources */,

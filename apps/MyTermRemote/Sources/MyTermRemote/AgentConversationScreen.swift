@@ -17,6 +17,12 @@ struct AgentConversationScreen: View {
     @State private var isShowingTerminal = false
     @State private var draft = ""
     @FocusState private var isWritingReply: Bool
+    @State private var isShowingCommands = false
+    /// A typed command that would open something on the Mac, held until the person confirms.
+    @State private var macOnlyCommand: AgentCommandCatalog.Command?
+    /// The last command whose answer went to the Mac's screen, for the bar that says so.
+    @State private var screenCommand: AgentCommandCatalog.Command?
+    @State private var screenCommandTimer: Task<Void, Never>?
 
     var body: some View {
         Group {
@@ -30,12 +36,17 @@ struct AgentConversationScreen: View {
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if !isShowingTerminal, let conversation = followedConversation {
-                    AgentModelMenu(tab: tab, store: store, current: conversation.currentModel) {
+                    Menu {
+                        AgentModelChoices(current: conversation.currentModel) { choice in
+                            send(AgentCommandCatalog.command(named: "/model")?.line(with: choice.argument) ?? choice.command)
+                        }
+                    } label: {
                         // Text rather than a Label: the bar draws a Label as its icon alone, and
                         // the name is the whole point of this item.
                         Text(modelLabel(for: conversation))
                             .font(.subheadline.weight(.medium))
                     }
+                    .disabled(!canSendCommands)
                     .accessibilityIdentifier("agent.model")
                 }
                 Button(isShowingTerminal ? "Conversation" : "Terminal",
@@ -47,6 +58,64 @@ struct AgentConversationScreen: View {
         }
         .onAppear { store.followConversation(tabID: tab.id) }
         .onDisappear { store.stopFollowingConversation(tabID: tab.id) }
+        .sheet(isPresented: $isShowingCommands) {
+            AgentCommandSheet(run: { command, argument in send(command.line(with: argument)) },
+                              currentModel: followedConversation?.currentModel)
+                .presentationDetents([.large])
+        }
+        .alert(
+            "This opens on your Mac",
+            isPresented: Binding(get: { macOnlyCommand != nil }, set: { if !$0 { macOnlyCommand = nil } }),
+            presenting: macOnlyCommand
+        ) { command in
+            Button("Send anyway") { deliver(command.name); draft = "" }
+            Button("Open terminal") { isShowingTerminal = true }
+            Button("Cancel", role: .cancel) {}
+        } message: { command in
+            Text("\(command.name) \(command.description.prefix(1).lowercased())\(command.description.dropFirst()). The phone cannot show it; the terminal can.")
+        }
+    }
+
+    /// Commands type into the tab, so they are gated as the composer is, and they go nowhere
+    /// while the agent is stopped on a permission prompt.
+    private var canSendCommands: Bool {
+        store.client.allowsMutation && store.promptOptions.isEmpty
+    }
+
+    /// One line into the tab, whatever produced it: the reply field, the sheet, a banner.
+    ///
+    /// The catalog says what to expect afterwards, and that decides what the phone does: warn
+    /// before a command that opens on the Mac, or say where the answer went when it cannot be
+    /// read back from the transcript.
+    /// Returns whether the line went, so a field can keep a draft the person has yet to confirm.
+    @discardableResult
+    private func send(_ line: String) -> Bool {
+        switch AgentCommandCatalog.typed(line) {
+        case .macOnly(let command):
+            macOnlyCommand = command
+            return false
+        case .runnable(let command):
+            deliver(line)
+            if command.outcome == .screen { showScreenNotice(for: command) }
+            return true
+        case .message, .unknown:
+            deliver(line)
+            return true
+        }
+    }
+
+    private func deliver(_ line: String) {
+        store.reply(tabID: tab.id, text: line)
+    }
+
+    private func showScreenNotice(for command: AgentCommandCatalog.Command) {
+        screenCommand = command
+        screenCommandTimer?.cancel()
+        screenCommandTimer = Task {
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled else { return }
+            screenCommand = nil
+        }
     }
 
     /// The store's conversation, when it is this tab's. A late one for a tab the person has left is
@@ -119,8 +188,21 @@ struct AgentConversationScreen: View {
     private var composer: some View {
         VStack(spacing: 0) {
             if let conversation = followedConversation,
-               AgentModelCatalog.usageLimitNotice(in: conversation.entries) != nil {
-                AgentLimitBanner(tab: tab, store: store, current: conversation.currentModel)
+               let notice = AgentCommandCatalog.notice(in: conversation.entries) {
+                AgentNoticeBanner(
+                    notice: notice,
+                    currentModel: conversation.currentModel,
+                    isEnabled: canSendCommands,
+                    run: { send($0) },
+                    openTerminal: { isShowingTerminal = true }
+                )
+            }
+            if let screenCommand {
+                AgentScreenNoticeBar(
+                    command: screenCommand,
+                    openTerminal: { self.screenCommand = nil; isShowingTerminal = true },
+                    dismiss: { self.screenCommand = nil }
+                )
             }
             input
         }
@@ -139,7 +221,12 @@ struct AgentConversationScreen: View {
         } else if !store.promptOptions.isEmpty {
             AgentPromptBar(tab: tab, store: store)
         } else {
-            AgentReplyBar(tab: tab, store: store, draft: $draft, isWriting: $isWritingReply)
+            AgentReplyBar(
+                draft: $draft,
+                isWriting: $isWritingReply,
+                send: send,
+                openCommands: { isShowingCommands = true }
+            )
         }
     }
 
@@ -261,91 +348,25 @@ private struct AgentPromptBar: View {
     }
 }
 
-/// The model the agent answers with, and the ones it could be switched to.
+/// Saying something to the agent, or running one of its commands.
 ///
-/// Choosing one types `/model <alias>` the way a reply is typed. There is no second way into the
-/// agent: the command reaches it as words, the agent's own record shows it ran, and the label
-/// changes when the next answer names the new model. Gated as the composer is, because it types.
-private struct AgentModelMenu<Label: View>: View {
-    let tab: RemoteTab
-    let store: RemoteSessionStore
-    /// The model identifier the transcript last named, to mark the matching choice.
-    let current: String?
-    @ViewBuilder let label: () -> Label
-
-    var body: some View {
-        Menu {
-            Section("Switch model") {
-                ForEach(AgentModelCatalog.choices.filter { !$0.hasExtendedContext }) { choice in
-                    button(for: choice)
-                }
-            }
-            Section("1M context") {
-                ForEach(AgentModelCatalog.choices.filter(\.hasExtendedContext)) { choice in
-                    button(for: choice)
-                }
-            }
-        } label: {
-            label()
-        }
-        // While the agent is stopped on a permission prompt it is not reading typed text, so a
-        // command sent then would go nowhere.
-        .disabled(!store.client.allowsMutation || !store.promptOptions.isEmpty)
-    }
-
-    private func button(for choice: AgentModelCatalog.Choice) -> some View {
-        Button {
-            store.reply(tabID: tab.id, text: choice.command)
-        } label: {
-            if choice == current.flatMap(AgentModelCatalog.choice(matchingModel:)) {
-                SwiftUI.Label(choice.label, systemImage: "checkmark")
-            } else {
-                Text(choice.label)
-            }
-        }
-        .accessibilityIdentifier("agent.model.\(choice.argument)")
-    }
-}
-
-/// The agent has said it is out of one model's usage. Switching is the way on from a phone, so
-/// the offer sits where the person is looking, above the reply field, rather than only in the bar.
-private struct AgentLimitBanner: View {
-    let tab: RemoteTab
-    let store: RemoteSessionStore
-    let current: String?
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Label("Your agent has hit its limit on this model", systemImage: "gauge.with.needle")
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(.orange)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            AgentModelMenu(tab: tab, store: store, current: current) {
-                Text("Switch model")
-                    .font(.footnote.weight(.semibold))
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .accessibilityIdentifier("agent.switchModel")
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color.orange.opacity(0.12))
-        .overlay(alignment: .top) { Divider() }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("agent.limitNotice")
-    }
-}
-
-/// Saying something to the agent.
+/// A "/" opens the command list, from the button or as the first character typed, because the
+/// commands are the one thing a person cannot be expected to remember on a phone.
 private struct AgentReplyBar: View {
-    let tab: RemoteTab
-    let store: RemoteSessionStore
     @Binding var draft: String
     @FocusState.Binding var isWriting: Bool
+    let send: (String) -> Bool
+    let openCommands: () -> Void
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            Button(action: openCommands) {
+                Image(systemName: "slash.circle")
+                    .font(.title2)
+            }
+            .accessibilityLabel("Commands")
+            .accessibilityIdentifier("agent.openCommands")
+
             // Grows with what is written, up to a point: a phone reply is often a sentence, and a
             // single line hides most of it.
             TextField("Reply to your agent", text: $draft, axis: .vertical)
@@ -358,7 +379,7 @@ private struct AgentReplyBar: View {
                 .accessibilityIdentifier("agent.reply")
 
             Button {
-                store.reply(tabID: tab.id, text: draft)
+                guard send(draft) else { return }
                 draft = ""
                 isWriting = false
             } label: {
@@ -372,6 +393,10 @@ private struct AgentReplyBar: View {
         .padding(.vertical, 8)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+        .onChange(of: draft) { previous, current in
+            // Only as the first character, so a path or a fraction typed later does not interrupt.
+            if current == "/", previous.isEmpty { openCommands() }
+        }
     }
 }
 
@@ -400,6 +425,8 @@ private struct AgentEntryView: View {
                         .foregroundStyle(.secondary)
                 case .localCommand(let command):
                     AgentLocalCommandView(command: command)
+                case .note(let note):
+                    AgentNoteView(note: note)
                 }
             }
         }
@@ -416,16 +443,21 @@ private struct AgentLocalCommandView: View {
 
     var body: some View {
         VStack(spacing: 3) {
-            if !command.name.isEmpty {
-                Text(ran)
+            if let note = AgentCommandCatalog.note(for: command) {
+                // The phone's own words for what happened, in place of a line the CLI wrote for
+                // its screen.
+                Text(note)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-            }
-            if !command.output.isEmpty {
-                Text(command.output)
-                    .font(.caption)
-                    .foregroundStyle(command.isError ? Color.red : .secondary)
-                    .textSelection(.enabled)
+            } else {
+                if !command.name.isEmpty {
+                    Text(ran)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                if !command.output.isEmpty {
+                    output
+                }
             }
         }
         .multilineTextAlignment(.center)
@@ -433,6 +465,23 @@ private struct AgentLocalCommandView: View {
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("agent.localCommand")
+    }
+
+    /// A line is centred under the command. A report, such as `/context`'s, reads as a block.
+    @ViewBuilder
+    private var output: some View {
+        if command.output.contains("\n") {
+            AgentMarkdownView(text: command.output)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(10)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        } else {
+            Text(command.output)
+                .font(.caption)
+                .foregroundStyle(command.isError ? Color.red : .secondary)
+                .textSelection(.enabled)
+        }
     }
 
     private var ran: String {

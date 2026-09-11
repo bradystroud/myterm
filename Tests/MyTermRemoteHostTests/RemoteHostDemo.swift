@@ -264,8 +264,10 @@ final class RemoteHostDemo: XCTestCase {
         case "writable":
             service.allowsInput = true
         case let command where command.hasPrefix("agent-session "):
-            // The tab's agent moved to a new session, as after `/clear`.
-            DemoDataSource.agentSessionOverride = String(command.dropFirst("agent-session ".count))
+            // The tab's agent moved to a new session, as after `/clear`. "default" is the one
+            // the environment named, so a test can put things back for the next.
+            let session = String(command.dropFirst("agent-session ".count))
+            DemoDataSource.agentSessionOverride = session == "default" ? nil : session
         default:
             print("DEMO_UNKNOWN_COMMAND \(command)")
         }

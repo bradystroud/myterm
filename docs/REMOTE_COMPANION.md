@@ -155,9 +155,62 @@ window. Choosing one types `/model <alias>` through the same reply path as any o
 is no second way into the agent: the record then shows the command ran, and the label changes when
 the next answer names the new model.
 
-When the agent's last turn is its notice that one model's usage has run out, the same menu is
-offered in a banner above the reply field, and it goes away once a `/model` has been run after
-the notice. Both the bar and the banner are gated exactly as the composer is, because they type.
+### Running the agent's commands
+
+`/model` is one of a family. `AgentCommandCatalog`, shared by host and device, sorts Claude
+Code's slash commands by what a phone can do with them. Every row was run against the installed
+CLI (2.1.258) through a PTY and its transcript read afterwards, so the table says what actually
+happens rather than what a menu promises.
+
+**Runnable from the phone.** Offered in a sheet behind the "/" button beside the reply field, and
+opened by typing "/" as the first character. Each ends as one line typed through the reply path,
+gated as the composer is.
+
+| Command | Group | Argument | What the phone expects afterwards |
+|---|---|---|---|
+| `/clear` | Session | none | A new session. The command is recorded in the new session's file; the old file never grows again. The phone shows "New session" and starts over. |
+| `/rename <name>` | Session | text, required | "Session renamed to: …" in the transcript. |
+| `/compact [instructions]` | Context | text, optional | "Compacted …" in the transcript, and a `compact_boundary` record before it. |
+| `/context` | Context | none | The usage grid in the transcript, then the same figures as markdown, which is what the phone shows. |
+| `/model <alias>` | Model | the model menu | "Set model to …" in the transcript; the bar's label follows the next answer. |
+| `/effort <level>` | Model | low, medium, high, xhigh, max | "Set effort level to …" in the transcript. |
+| `/usage` | Info | none | Nothing in the transcript: a dialog on the Mac's screen. The phone says "shown on your Mac" and offers the terminal. |
+| `/status` | Info | none | As `/usage`. |
+| `/help` | Info | none | As `/usage`. |
+
+**Interactive on the Mac only.** Not offered. Typed by hand, the phone warns that the command
+opens on the Mac and offers the terminal view, or sends it anyway. `/model` and `/effort` with no
+argument belong here, because without one they open the picker. The rest: `/cost` (the usage
+dialog), `/resume`, `/rewind`, `/config`, `/permissions`, `/mcp`, `/skills`, `/plugin`,
+`/memory`, `/doctor`, `/fast` (a confirmation dialog), and `/usage-credits` and `/login`, which
+start a sign-in flow.
+
+**Not applicable.** Not offered and not named: `/exit`, `/logout`, `/vim`, `/terminal-setup`,
+`/init`, and any custom skill. A slash command the table does not know is sent as typed, and the
+agent says what it is.
+
+Two commands change the record itself, and the projection handles both:
+
+- `/clear` starts a new session. On a real Mac the `SessionStart` hook reports the new identifier
+  and `AppModel` stores it against the tab, so the host's watcher asks for the tab's current
+  session on every poll rather than holding the one it was given. A changed identifier is a
+  fresh backlog: the device's conversation is replaced, and its first row is the `/clear` that
+  started it, shown as "New session".
+- `/compact` writes a `compact_boundary` record and then the summary as a user turn flagged
+  `isCompactSummary`. The summary is never shown as a message. A manual compaction is shown once,
+  by its `/compact` row ("Compacted the conversation"); an automatic one, which has no command,
+  is shown as a note ("Conversation compacted").
+
+**Notices.** The agent stops and names the command that would get it going again, and the
+phone offers that command in a banner above the reply field. The matcher table covers the usage
+limit ("You've reached your … limit … /model"), high demand ("use /model to switch"), a full
+context window ("Context limit reached … /compact"), usage credits, and a lost sign-in
+("run /login"). A notice's button does what the catalog says its command does: the model list for
+`/model`, one tap for `/compact`, and the terminal for a command that only works on the Mac.
+The banner goes once anything that is not the person's has been recorded after it: a command, a
+note, or an answer. Warnings the agent records for itself (`informational`, and
+`model_refusal_fallback`, which says a model was swapped after a refusal) are shown as notes and
+feed the same matcher.
 
 ### Following it
 
