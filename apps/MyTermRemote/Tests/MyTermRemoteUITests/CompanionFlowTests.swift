@@ -605,3 +605,74 @@ final class AgentCommandTests: XCTestCase {
         try? screenshot.pngRepresentation.write(to: url)
     }
 }
+
+/// What the agent's markdown looks like once it is on the phone.
+///
+/// Skipped unless the demo host was pointed at a transcript, as `AgentAnsweringTests` is, and
+/// `MYTERM_REMOTE_AGENT_TABLE_SESSION` names a second transcript whose last message is a pipe
+/// table followed by a rule and a task list. The host is switched to it the way `/clear` would.
+final class AgentMarkdownTests: XCTestCase {
+    private let environment = ProcessInfo.processInfo.environment
+    private var host: String { environment["MYTERM_REMOTE_HOST"] ?? "localhost" }
+    private var port: String { environment["MYTERM_REMOTE_PORT"] ?? "" }
+    private var token: String { environment["MYTERM_REMOTE_TOKEN"] ?? "demotoken" }
+    private var shotsDirectory: String? { environment["MYTERM_SHOTS_DIR"] }
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        try XCTSkipIf(port.isEmpty, "Set MYTERM_REMOTE_PORT to the port a MyTerm host is listening on.")
+        try XCTSkipIf(
+            environment["MYTERM_REMOTE_AGENT_TAB"] == nil,
+            "Set MYTERM_REMOTE_AGENT_TAB to a tab the host offers a conversation for."
+        )
+        try XCTSkipIf(
+            environment["MYTERM_REMOTE_AGENT_TABLE_SESSION"] == nil,
+            "Set MYTERM_REMOTE_AGENT_TABLE_SESSION to a transcript that ends on a pipe table."
+        )
+    }
+
+    @MainActor
+    func testAPipeTableIsAGridNotAParagraphOfPipes() throws {
+        let session = try XCTUnwrap(environment["MYTERM_REMOTE_AGENT_TABLE_SESSION"])
+        let app = XCUIApplication()
+        app.launchEnvironment["MYTERM_REMOTE_RESET_STATE"] = "1"
+        app.launchArguments += [
+            "-remote.host", host,
+            "-remote.port", port,
+            "-remote.token", token,
+            "-remote.reconnectsOnLaunch", "YES",
+            "-remote.openTab", try XCTUnwrap(environment["MYTERM_REMOTE_AGENT_TAB"]),
+        ]
+        app.launch()
+        XCTAssertTrue(app.textFields["agent.reply"].waitForExistence(timeout: 25), "an agent tab should offer a reply field")
+
+        try tellHost("agent-session \(session)")
+        defer { try? tellHost("agent-session default") }
+
+        let table = app.descendants(matching: .any)["agent.table"].firstMatch
+        XCTAssertTrue(table.waitForExistence(timeout: 10), "the table should be laid out as a grid")
+        XCTAssertTrue(app.staticTexts["Suite"].exists, "the header row is shown cell by cell")
+        XCTAssertTrue(app.staticTexts["AgentMarkdownTests"].exists, "a cell keeps its inline markdown, without the backticks")
+        let pipes = NSPredicate(format: "label CONTAINS '|--' OR label BEGINSWITH '|'")
+        XCTAssertFalse(app.staticTexts.containing(pipes).firstMatch.exists, "no row of pipes reaches the screen")
+        XCTAssertTrue(app.staticTexts["splitter recognises pipe tables"].exists, "a task list is shown item by item")
+        snap("9x-markdown-table")
+    }
+
+    private func tellHost(_ command: String) throws {
+        let path = try XCTUnwrap(environment["MYTERM_REMOTE_CONTROL_FILE"], "the demo host's control file is not set")
+        try command.write(toFile: path, atomically: true, encoding: .utf8)
+    }
+
+    @MainActor
+    private func snap(_ name: String) {
+        let screenshot = XCUIScreen.main.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        guard let shotsDirectory else { return }
+        let url = URL(fileURLWithPath: shotsDirectory).appendingPathComponent("\(name).png")
+        try? screenshot.pngRepresentation.write(to: url)
+    }
+}
