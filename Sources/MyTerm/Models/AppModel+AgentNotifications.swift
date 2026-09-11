@@ -22,21 +22,21 @@ extension AppModel {
     /// The backlog as the popover shows it, newest first.
     ///
     /// Titles are resolved on every read rather than copied when the entry is filed, so renaming a
-    /// tab, or an agent renaming its own conversation, renames the row that points at it. An entry
-    /// whose tab is gone is dropped rather than shown as a row that leads nowhere.
+    /// tab, or an agent renaming its own conversation, renames the row that points at it. So is the
+    /// pane: a tab dragged into another pane is still the tab that is waiting. An entry whose tab is
+    /// gone is dropped rather than shown as a row that leads nowhere.
     var agentNotificationItems: [AgentNotificationItem] {
         let workspacesByID = Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) })
         return agentInbox.items.compactMap { entry in
             guard let workspace = workspacesByID[entry.workspaceID],
-                  let tab = workspace.orderedGroups
-                      .first(where: { $0.id == entry.tabGroupID })?
-                      .tabs.first(where: { $0.id == entry.tabID }) else {
+                  let tabGroupID = workspace.groupID(containing: entry.tabID),
+                  let tab = workspace.tab(id: entry.tabID) else {
                 return nil
             }
             return AgentNotificationItem(
                 id: entry.tabID,
                 workspaceID: entry.workspaceID,
-                tabGroupID: entry.tabGroupID,
+                tabGroupID: tabGroupID,
                 activity: entry.activity,
                 date: entry.date,
                 workspaceTitle: workspace.displayTitle,

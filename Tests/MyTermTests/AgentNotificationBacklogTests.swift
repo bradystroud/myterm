@@ -107,6 +107,34 @@ final class AgentNotificationBacklogTests: XCTestCase {
         XCTAssertTrue(model.agentNotificationItems.isEmpty)
     }
 
+    func testTheBacklogFollowsATabIntoAnotherPane() throws {
+        let harness = try makeHarness()
+        let model = harness.model
+        let workspace = model.selectedWorkspace
+        let group = try XCTUnwrap(workspace.orderedGroups.first)
+        let firstTabID = group.selectedTabID
+        model.createTerminalTab()
+        model.createWorkspace()
+
+        harness.record(.awaitingInput, workspaceID: workspace.id, tabGroupID: group.id, tabID: firstTabID)
+        XCTAssertEqual(model.agentNotificationCount, 1)
+
+        guard case .moved(let newGroupID) = model.moveTabToNewGroup(
+            workspaceID: workspace.id,
+            sourceTabGroupID: group.id,
+            tabID: firstTabID,
+            beside: group.id,
+            edge: .right
+        ) else {
+            return XCTFail("precondition: the tab moves into a new pane")
+        }
+
+        let item = try XCTUnwrap(model.agentNotificationItems.first, "the entry is the tab's, wherever the tab sits")
+        XCTAssertEqual(item.id, firstTabID)
+        XCTAssertEqual(item.tabGroupID, newGroupID, "opening the entry must look in the pane the tab is in now")
+        XCTAssertEqual(model.remoteNotifications()?.entries.map(\.tabID), [firstTabID.description])
+    }
+
     func testTheNewestNotificationComesFirst() throws {
         let harness = try makeHarness()
         let model = harness.model
