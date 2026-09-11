@@ -290,10 +290,45 @@ private struct AgentEntryView: View {
                     Label("Image", systemImage: "photo")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                case .localCommand(let command):
+                    AgentLocalCommandView(command: command)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A command the person ran in the agent's own interface, such as `/model`.
+///
+/// It is not something said to the agent, so it does not get a bubble. It reads like the note a
+/// messaging app leaves when a setting changes: centred, small, and out of the way of the talk.
+private struct AgentLocalCommandView: View {
+    let command: RemoteAgentLocalCommand
+
+    var body: some View {
+        VStack(spacing: 3) {
+            if !command.name.isEmpty {
+                Text(ran)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+            if !command.output.isEmpty {
+                Text(command.output)
+                    .font(.caption)
+                    .foregroundStyle(command.isError ? Color.red : .secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("agent.localCommand")
+    }
+
+    private var ran: String {
+        command.args.isEmpty ? "Ran \(command.name)" : "Ran \(command.name) \(command.args)"
     }
 }
 

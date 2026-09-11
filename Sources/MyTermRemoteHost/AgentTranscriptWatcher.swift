@@ -112,12 +112,13 @@ public final class AgentTranscriptWatcher {
         offset = read.length
         guard !read.lines.isEmpty else { return }
 
-        var fresh: [RemoteAgentEntry] = []
         for line in read.lines {
             if let name = reader.title(from: line), name != title {
                 title = name
             }
-            guard let entry = reader.entry(from: line), !delivered.contains(entry.id) else { continue }
+        }
+        var fresh: [RemoteAgentEntry] = []
+        for entry in reader.entries(from: read.lines) where !delivered.contains(entry.id) {
             delivered.insert(entry.id)
             fresh.append(entry)
         }

@@ -71,6 +71,28 @@ public struct RemoteAgentEntry: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// A command the person ran in the agent's own interface, such as `/model` or `/clear`.
+///
+/// The agent records these as user turns wrapped in markup and tells itself not to answer them.
+/// They are not something the person said to the agent, so a device shows them as a note of what
+/// was done rather than as a message bubble.
+public struct RemoteAgentLocalCommand: Codable, Equatable, Sendable {
+    /// The command as typed, slash included. Empty when only the output could be read.
+    public var name: String
+    public var args: String
+    /// What the command printed, with the agent's terminal styling stripped. Often empty.
+    public var output: String
+    /// True when the output came from the command's error stream.
+    public var isError: Bool
+
+    public init(name: String, args: String = "", output: String = "", isError: Bool = false) {
+        self.name = name
+        self.args = args
+        self.output = output
+        self.isError = isError
+    }
+}
+
 /// What a tool was asked to do.
 ///
 /// `summary` is the one line a row shows. `detail` is the whole request, capped, for when the
@@ -157,13 +179,15 @@ public enum RemoteAgentBlock: Codable, Equatable, Sendable {
     /// An image the conversation carried. The bytes stay on the Mac: a device is told one was
     /// there, which is enough to explain a gap, and nothing is spent sending it.
     case image
+    /// A command run in the agent's interface, not a message to it.
+    case localCommand(RemoteAgentLocalCommand)
 
     private enum Kind: String, Codable {
-        case text, thinking, toolUse, toolResult, image
+        case text, thinking, toolUse, toolResult, image, localCommand
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, text, thinking, toolUse, toolResult
+        case type, text, thinking, toolUse, toolResult, localCommand
     }
 
     public init(from decoder: Decoder) throws {
@@ -179,6 +203,8 @@ public enum RemoteAgentBlock: Codable, Equatable, Sendable {
             self = .toolResult(try container.decode(RemoteAgentToolResult.self, forKey: .toolResult))
         case .image:
             self = .image
+        case .localCommand:
+            self = .localCommand(try container.decode(RemoteAgentLocalCommand.self, forKey: .localCommand))
         }
     }
 
@@ -199,6 +225,9 @@ public enum RemoteAgentBlock: Codable, Equatable, Sendable {
             try container.encode(value, forKey: .toolResult)
         case .image:
             try container.encode(Kind.image, forKey: .type)
+        case .localCommand(let value):
+            try container.encode(Kind.localCommand, forKey: .type)
+            try container.encode(value, forKey: .localCommand)
         }
     }
 }

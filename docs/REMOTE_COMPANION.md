@@ -129,6 +129,17 @@ point of use and refused unless it can only name a file.
   tool detail, and the backlog as a whole are cut against `RemoteAgentLimits` before they reach the
   wire, and the device says so rather than presenting a cut file as a whole one.
 
+### Commands run in the agent's own interface
+
+A person typing `/model` or `/clear` is not saying something to the agent, and the agent's record
+agrees: it files the command as a turn wrapped in `<command-name>` markup, what it printed in
+`<local-command-stdout>`, and before both a `<local-command-caveat>` telling itself not to answer.
+Newer builds file the same markup as a `system` record with subtype `local_command`. The projection
+turns the pair into one `localCommand` block carrying the name, the arguments, and the output with
+its terminal styling stripped, and drops the caveat, which is the same words every time and is
+addressed to the agent. The device shows it as a centred note, "Ran /model" with the output under
+it, rather than as a message bubble.
+
 ### Following it
 
 The file is append-only while a session runs, so following it means remembering an offset and taking
