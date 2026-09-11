@@ -22,6 +22,9 @@ private final class FakeDataSource: RemoteHostDataSource {
     var receivedInput = [UInt8]()
     var detachedAttachments = [UUID]()
     var snapshotBytes = Array("SCREEN".utf8)
+    var notifications: RemoteNotifications?
+
+    func remoteNotifications() -> RemoteNotifications? { notifications }
 
     func remoteTree() -> RemoteTree {
         RemoteTree(
@@ -142,6 +145,14 @@ private final class Collector: RemoteClientDelegate {
     }
 
     func remoteClient(_ client: RemoteClient, didReceive activity: RemoteAgentActivity) {}
+
+    var notifications = [RemoteNotifications]()
+    var onNotifications: (() -> Void)?
+
+    func remoteClient(_ client: RemoteClient, didReceive notifications: RemoteNotifications) {
+        self.notifications.append(notifications)
+        onNotifications?()
+    }
 }
 
 final class RemoteHostEndToEndTests: XCTestCase {
@@ -439,6 +450,43 @@ final class RemoteHostEndToEndTests: XCTestCase {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         XCTAssertTrue(client.allowsMutation)
+        client.disconnect()
+    }
+
+    /// The backlog arrives with the tree, so a device that has just connected already knows what
+    /// happened while it was away, and again each time the Mac says it changed.
+    @MainActor
+    func testTheBacklogArrivesOnConnectAndAgainWhenTheMacPushesIt() async throws {
+        let token = RemoteTransportSecurity.makeToken()
+        let source = FakeDataSource()
+        let waiting = RemoteNotification(
+            tabID: FakeDataSource.tabID,
+            workspaceID: "workspace-1",
+            workspaceTitle: "myterm",
+            tabTitle: "Terminal",
+            activity: .awaitingInput,
+            date: Date(timeIntervalSinceReferenceDate: 1_000)
+        )
+        source.notifications = RemoteNotifications(entries: [waiting])
+        let (service, port) = try await startedService(token: token, dataSource: source)
+        defer { service.stop() }
+
+        let collector = Collector()
+        let client = RemoteClient(deviceName: "TestPad")
+        client.delegate = collector
+        let arrived = expectation(description: "backlog")
+        collector.onNotifications = { arrived.fulfill() }
+        client.connect(host: "127.0.0.1", port: port, token: token)
+        await fulfillment(of: [arrived], timeout: 10)
+        XCTAssertEqual(collector.notifications.first?.entries, [waiting])
+
+        // The user reached the tab on the Mac. The device is told the backlog is empty now.
+        let emptied = expectation(description: "emptied")
+        collector.onNotifications = { emptied.fulfill() }
+        service.broadcast(notifications: RemoteNotifications(entries: []))
+        await fulfillment(of: [emptied], timeout: 10)
+        XCTAssertEqual(collector.notifications.last?.entries, [])
+
         client.disconnect()
     }
 

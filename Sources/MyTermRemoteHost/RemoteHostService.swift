@@ -197,6 +197,12 @@ public final class RemoteHostService {
         }
     }
 
+    public func broadcast(notifications: RemoteNotifications) {
+        for connection in connections.values {
+            connection.send(notifications: notifications)
+        }
+    }
+
     private func handle(listenerState: NWListener.State) {
         switch listenerState {
         case .ready:

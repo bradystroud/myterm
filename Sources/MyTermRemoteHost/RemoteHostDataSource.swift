@@ -47,6 +47,12 @@ public protocol RemoteHostDataSource: AnyObject {
     /// The screen as it is now, for a resync.
     func snapshot(session: UUID) -> RemoteAttachment?
 
+    /// The backlog of agents waiting for the user, as the Mac's bell lists it.
+    ///
+    /// `nil` means this source keeps no backlog, and nothing is sent. Defaulted, because a source
+    /// that only serves terminals is a complete source, and every test fake is one of those.
+    func remoteNotifications() -> RemoteNotifications?
+
     /// The agent conversation this tab is in, when it has one.
     ///
     /// The host projects the conversation by reading the agent's own transcript, so this only has
@@ -94,6 +100,7 @@ public protocol RemoteHostDataSource: AnyObject {
 }
 
 public extension RemoteHostDataSource {
+    func remoteNotifications() -> RemoteNotifications? { nil }
     func agentSession(tabID: String) -> RemoteAgentSession? { nil }
     func sendInput(tabID: String, bytes: ArraySlice<UInt8>) -> Bool { false }
     func visibleRows(tabID: String) -> [String]? { nil }

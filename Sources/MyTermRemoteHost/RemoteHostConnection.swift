@@ -112,6 +112,10 @@ final class RemoteHostConnection {
         sendControl(.agentActivity(agentActivity))
     }
 
+    func send(notifications: RemoteNotifications) {
+        sendControl(.notifications(notifications))
+    }
+
     private func receive() {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) {
             [weak self] content, _, isComplete, error in
@@ -180,6 +184,9 @@ final class RemoteHostConnection {
             sendWelcome()
             if let tree = dataSource?.remoteTree() {
                 sendControl(.tree(tree))
+            }
+            if let notifications = dataSource?.remoteNotifications() {
+                sendControl(.notifications(notifications))
             }
             onStateChanged?()
 
@@ -298,7 +305,7 @@ final class RemoteHostConnection {
                 $0.createTerminalTab(workspaceID: request.workspaceID)
             }
 
-        case .welcome, .tree, .attached, .resync, .agentActivity,
+        case .welcome, .tree, .attached, .resync, .agentActivity, .notifications,
              .agentConversation, .agentEntries, .agentPrompt, .error:
             // The host never receives these.
             break

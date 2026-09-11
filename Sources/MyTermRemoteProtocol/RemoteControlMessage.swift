@@ -32,6 +32,8 @@ public enum RemoteControlMessage: Codable, Equatable, Sendable {
     case resync(session: UUID)
     /// Host to device, mirroring the Mac's attention dot.
     case agentActivity(RemoteAgentActivity)
+    /// Host to device, mirroring the Mac's bell: the whole backlog, whenever it changes.
+    case notifications(RemoteNotifications)
 
     // The agent conversation a tab is having, which a device renders as messages rather than as the
     // grid the agent happens to be drawing. This is a separate attachment from the terminal one: a
@@ -71,6 +73,7 @@ public enum RemoteControlMessage: Codable, Equatable, Sendable {
         case renameTab, closeTab, renameWorkspace, createWorkspace, deleteWorkspace, createTerminalTab
         case attachAgent, agentConversation, agentEntries, detachAgent
         case agentReply, agentPrompt, agentAnswer
+        case notifications
     }
 
     private enum Kind: String, Codable {
@@ -78,6 +81,7 @@ public enum RemoteControlMessage: Codable, Equatable, Sendable {
         case renameTab, closeTab, renameWorkspace, createWorkspace, deleteWorkspace, createTerminalTab
         case attachAgent, agentConversation, agentEntries, detachAgent
         case agentReply, agentPrompt, agentAnswer
+        case notifications
     }
 
     public init(from decoder: Decoder) throws {
@@ -116,6 +120,8 @@ public enum RemoteControlMessage: Codable, Equatable, Sendable {
             self = .agentPrompt(try container.decode(RemoteAgentPrompt.self, forKey: .agentPrompt))
         case .agentAnswer:
             self = .agentAnswer(try container.decode(RemoteAgentAnswer.self, forKey: .agentAnswer))
+        case .notifications:
+            self = .notifications(try container.decode(RemoteNotifications.self, forKey: .notifications))
         case .error: self = .error(try container.decode(RemoteError.self, forKey: .error))
         }
     }
@@ -186,6 +192,9 @@ public enum RemoteControlMessage: Codable, Equatable, Sendable {
         case .agentAnswer(let value):
             try container.encode(Kind.agentAnswer, forKey: .type)
             try container.encode(value, forKey: .agentAnswer)
+        case .notifications(let value):
+            try container.encode(Kind.notifications, forKey: .type)
+            try container.encode(value, forKey: .notifications)
         case .error(let value):
             try container.encode(Kind.error, forKey: .type)
             try container.encode(value, forKey: .error)
@@ -251,6 +260,48 @@ public struct RemoteAgentActivity: Codable, Equatable, Sendable {
     }
 
     public var needsAttention: Bool { activity?.needsAttention ?? false }
+}
+
+/// One agent waiting for the user, as the Mac's bell lists it.
+///
+/// The titles travel with the entry rather than being looked up in the tree. A device keeps an
+/// entry after the Mac has dropped it, and by then the tab it named may be gone from the tree too.
+public struct RemoteNotification: Codable, Equatable, Sendable {
+    public var tabID: String
+    public var workspaceID: String
+    public var workspaceTitle: String
+    public var tabTitle: String
+    public var activity: AgentActivity
+    /// When the event that produced this entry arrived on the Mac.
+    public var date: Date
+
+    public init(
+        tabID: String,
+        workspaceID: String,
+        workspaceTitle: String,
+        tabTitle: String,
+        activity: AgentActivity,
+        date: Date
+    ) {
+        self.tabID = tabID
+        self.workspaceID = workspaceID
+        self.workspaceTitle = workspaceTitle
+        self.tabTitle = tabTitle
+        self.activity = activity
+        self.date = date
+    }
+}
+
+/// The Mac's whole backlog, newest first, sent on connect and again whenever it changes.
+///
+/// Whole rather than a delta, for the same reason the tree is: an entry the Mac has read is one
+/// that is simply not in the next snapshot, and a device works out the difference itself.
+public struct RemoteNotifications: Codable, Equatable, Sendable {
+    public var entries: [RemoteNotification]
+
+    public init(entries: [RemoteNotification]) {
+        self.entries = entries
+    }
 }
 
 public struct RemoteRenameTab: Codable, Equatable, Sendable {

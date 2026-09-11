@@ -64,6 +64,8 @@ public protocol RemoteClientDelegate: AnyObject {
     /// Clear the emulator. A fresh screen arrives immediately after.
     func remoteClient(_ client: RemoteClient, shouldResync session: UUID)
     func remoteClient(_ client: RemoteClient, didReceive activity: RemoteAgentActivity)
+    /// The Mac's backlog of agents waiting for the user, whole, whenever it changes.
+    func remoteClient(_ client: RemoteClient, didReceive notifications: RemoteNotifications)
     /// An agent conversation, whole, as it stood when the device asked for it.
     func remoteClient(_ client: RemoteClient, didReceive conversation: RemoteAgentConversation)
     /// The entries that arrived after that.
@@ -76,6 +78,7 @@ public protocol RemoteClientDelegate: AnyObject {
 
 public extension RemoteClientDelegate {
     func remoteClient(_ client: RemoteClient, didRefuse error: RemoteError) {}
+    func remoteClient(_ client: RemoteClient, didReceive notifications: RemoteNotifications) {}
     func remoteClient(_ client: RemoteClient, didReceive conversation: RemoteAgentConversation) {}
     func remoteClient(_ client: RemoteClient, didReceive entries: RemoteAgentEntries) {}
     func remoteClient(_ client: RemoteClient, didReceive prompt: RemoteAgentPrompt) {}
@@ -500,6 +503,8 @@ public final class RemoteClient {
             delegate?.remoteClient(self, shouldResync: session)
         case .agentActivity(let activity):
             delegate?.remoteClient(self, didReceive: activity)
+        case .notifications(let notifications):
+            delegate?.remoteClient(self, didReceive: notifications)
         case .error(let error):
             lastError = error
             // Before the welcome, an error is the handshake failing and the host closes the socket

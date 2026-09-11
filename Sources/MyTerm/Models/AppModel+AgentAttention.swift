@@ -36,13 +36,15 @@ extension AppModel {
         let shown: AgentActivity? = report.activity.showsCook ? report.activity : nil
         agentAttention[tabID] = isInFrontOfUser ? shown.flatMap(\.afterReading) : shown
         // The bell keeps the same answer as the cook: a tab in front of the user has nothing to file.
-        agentInbox.record(
+        if agentInbox.record(
             report.activity,
             workspaceID: workspaceID,
             tabGroupID: tabGroupID,
             tabID: tabID,
             isTabVisible: isInFrontOfUser
-        )
+        ) {
+            broadcastAgentNotifications()
+        }
         broadcastAgentActivity(forTab: tabID)
         // A banner is for being away from the app. With MyTerm in front, the cook has already said it.
         guard !isApplicationActive() else { return }
@@ -65,14 +67,18 @@ extension AppModel {
     }
 
     func markAsRead(tabID: TabID) {
-        agentInbox.markRead(tabID: tabID)
+        if agentInbox.markRead(tabID: tabID) {
+            broadcastAgentNotifications()
+        }
         guard let activity = agentAttention[tabID] else { return }
         agentAttention[tabID] = activity.afterReading
         broadcastAgentActivity(forTab: tabID)
     }
 
     func forgetAgentAttention(forTab tabID: TabID) {
-        agentInbox.markRead(tabID: tabID)
+        if agentInbox.markRead(tabID: tabID) {
+            broadcastAgentNotifications()
+        }
         guard agentAttention.removeValue(forKey: tabID) != nil else { return }
         broadcastAgentActivity(forTab: tabID)
     }

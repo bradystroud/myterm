@@ -148,6 +148,8 @@ final class RemoteProtocolTests: XCTestCase {
             .detach(session: session),
             .resync(session: session),
             .agentActivity(RemoteAgentActivity(tabID: "tab-1", activity: .awaitingInput)),
+            .notifications(sampleNotifications()),
+            .notifications(RemoteNotifications(entries: [])),
             .error(RemoteError(code: "not_found", message: "No such tab.")),
         ]
 
@@ -158,6 +160,42 @@ final class RemoteProtocolTests: XCTestCase {
             XCTAssertEqual(decoded, message)
             XCTAssertEqual(frame.kind, .control)
         }
+    }
+
+    /// The order is the one the user works through, and the wire must keep it: a device that
+    /// sorted for itself would put two entries with the same second in whichever order it liked.
+    func testNotificationsKeepTheirOrderAndDatesAcrossTheWire() throws {
+        let sent = sampleNotifications()
+
+        let decoded = try RemoteControlCodec.decode(RemoteControlCodec.encode(.notifications(sent)))
+
+        guard case .notifications(let received) = decoded else {
+            return XCTFail("the message changed kind on the way through")
+        }
+        XCTAssertEqual(received.entries.map(\.tabID), ["tab-2", "tab-1"])
+        XCTAssertEqual(received.entries.map(\.date), sent.entries.map(\.date))
+        XCTAssertEqual(received.entries.map(\.activity), [.awaitingInput, .finished])
+    }
+
+    private func sampleNotifications() -> RemoteNotifications {
+        RemoteNotifications(entries: [
+            RemoteNotification(
+                tabID: "tab-2",
+                workspaceID: "ws-1",
+                workspaceTitle: "api",
+                tabTitle: "server",
+                activity: .awaitingInput,
+                date: Date(timeIntervalSinceReferenceDate: 1_000)
+            ),
+            RemoteNotification(
+                tabID: "tab-1",
+                workspaceID: "ws-1",
+                workspaceTitle: "api",
+                tabTitle: "build",
+                activity: .finished,
+                date: Date(timeIntervalSinceReferenceDate: 900)
+            ),
+        ])
     }
 
     // MARK: - RemoteAgentActivity.needsAttention

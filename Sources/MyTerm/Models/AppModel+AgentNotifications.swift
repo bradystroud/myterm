@@ -1,5 +1,6 @@
 import Foundation
 import MyTermCore
+import MyTermRemoteProtocol
 
 /// The backlog of agents waiting for the user, behind the bell in the toolbar.
 ///
@@ -46,6 +47,29 @@ extension AppModel {
 
     var agentNotificationCount: Int { agentNotificationItems.count }
 
+    /// The backlog as a device receives it, for its Latest tab.
+    func remoteNotifications() -> RemoteNotifications? {
+        RemoteNotifications(entries: agentNotificationItems.map { item in
+            RemoteNotification(
+                tabID: item.id.description,
+                workspaceID: item.workspaceID.description,
+                workspaceTitle: item.workspaceTitle,
+                tabTitle: item.tabTitle,
+                activity: item.activity,
+                date: item.date
+            )
+        })
+    }
+
+    /// Pushes the backlog to every connected device, so its Latest tab follows the bell.
+    ///
+    /// Reading on a device changes nothing here. Whether a tab read on the phone should lose its
+    /// dot on the Mac is still an open question, so for now the Mac is the only place that reads.
+    func broadcastAgentNotifications() {
+        guard let notifications = remoteNotifications() else { return }
+        remoteHost.broadcast(notifications: notifications)
+    }
+
     /// Goes to the tab the entry points at. Arriving is what reads it.
     func openAgentNotification(_ item: AgentNotificationItem) {
         if store.selectedWorkspaceID != item.workspaceID {
@@ -60,6 +84,7 @@ extension AppModel {
             markAsRead(tabID: entry.tabID)
         }
         agentInbox.removeAll()
+        broadcastAgentNotifications()
     }
 }
 
