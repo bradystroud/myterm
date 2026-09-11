@@ -623,6 +623,12 @@ read.
 Reading on the device changes nothing on the Mac. Whether a tab read on the phone should lose its dot on
 the Mac is not yet decided, so for now the Mac is the only place that reads its own backlog.
 
+The tab is only ever as full as the Mac's backlog was while the device was connected. An agent that
+finished in front of the user was never filed, and one the user reached before the device connected has
+already been dropped, so a device that connects afterwards sees nothing of either. A Mac running a MyTerm
+from before this tab never sends the message at all, and the device shows an empty inbox rather than
+waiting on it.
+
 Push is not in this plan. It becomes cheap later rather than expensive, because the relay already holds
 a connection to the host and a relationship with the device. Adding a contentless push is then a feature
 of an existing service, not a new service. Should it ship, the payload carries no terminal content, no
