@@ -561,6 +561,9 @@ final class RemoteHostEndToEndTests: XCTestCase {
         collector.onTree = { treeArrived.fulfill() }
         client.connect(host: "127.0.0.1", port: port, token: token)
         await fulfillment(of: [treeArrived], timeout: 10)
+        // The host sends the tree again on its first poll, a second on. Fulfilling a fulfilled
+        // expectation is an XCTest violation that takes the async test machinery down with it.
+        collector.onTree = nil
 
         // Sent as raw messages rather than through `RemoteClient`, whose own helpers decline to send
         // these at all. Hiding a control is not a permission check, so this proves the host refuses
