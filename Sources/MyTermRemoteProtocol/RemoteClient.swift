@@ -72,6 +72,8 @@ public protocol RemoteClientDelegate: AnyObject {
     func remoteClient(_ client: RemoteClient, didReceive entries: RemoteAgentEntries)
     /// What a pending permission prompt is offering. Empty options mean it has gone.
     func remoteClient(_ client: RemoteClient, didReceive prompt: RemoteAgentPrompt)
+    /// What a screen-only command drew on the Mac, and whether it is still up.
+    func remoteClient(_ client: RemoteClient, didReceive screen: RemoteAgentScreen)
     /// The host refused one request. The connection is still good.
     func remoteClient(_ client: RemoteClient, didRefuse error: RemoteError)
 }
@@ -82,6 +84,7 @@ public extension RemoteClientDelegate {
     func remoteClient(_ client: RemoteClient, didReceive conversation: RemoteAgentConversation) {}
     func remoteClient(_ client: RemoteClient, didReceive entries: RemoteAgentEntries) {}
     func remoteClient(_ client: RemoteClient, didReceive prompt: RemoteAgentPrompt) {}
+    func remoteClient(_ client: RemoteClient, didReceive screen: RemoteAgentScreen) {}
 }
 
 /// The device end of a MyTerm Remote connection.
@@ -236,6 +239,11 @@ public final class RemoteClient {
 
     public func denyAgentPrompt(tabID: String) {
         send(.agentAnswer(RemoteAgentAnswer(tabID: tabID, isDeny: true)))
+    }
+
+    /// Asks for the dialog a screen-only command drew to be closed. The host sends the Escape.
+    public func dismissAgentScreen(tabID: String) {
+        send(.dismissAgentScreen(RemoteDismissAgentScreen(tabID: tabID)))
     }
 
     public func sendInput(_ bytes: [UInt8], to session: UUID) {
@@ -522,9 +530,11 @@ public final class RemoteClient {
             delegate?.remoteClient(self, didReceive: entries)
         case .agentPrompt(let prompt):
             delegate?.remoteClient(self, didReceive: prompt)
+        case .agentScreen(let screen):
+            delegate?.remoteClient(self, didReceive: screen)
         case .hello, .attach, .detach, .attachAgent, .detachAgent, .agentReply, .agentAnswer,
-             .renameTab, .closeTab, .renameWorkspace, .createWorkspace, .deleteWorkspace,
-             .createTerminalTab:
+             .dismissAgentScreen, .renameTab, .closeTab, .renameWorkspace, .createWorkspace,
+             .deleteWorkspace, .createTerminalTab:
             break
         }
     }
