@@ -528,6 +528,14 @@ private struct AgentMarkdownView: View {
                     list(items) { _ in Text("•") }
                 case .numbered(let items):
                     list(items) { index in Text("\(index + 1).").monospacedDigit() }
+                case .tasks(let items):
+                    list(items.map(\.text)) { index in
+                        Text(Image(systemName: items[index].isDone ? "checkmark.square" : "square"))
+                    }
+                case .rule:
+                    Divider()
+                case .table(let header, let alignments, let rows):
+                    AgentTableView(header: header, alignments: alignments, rows: rows)
                 case .quote(let body):
                     HStack(alignment: .top, spacing: 8) {
                         RoundedRectangle(cornerRadius: 1).frame(width: 3)
@@ -560,15 +568,105 @@ private struct AgentMarkdownView: View {
         .padding(.leading, 4)
     }
 
-    /// Bold, italics, code spans, and links. A message the parser cannot read is shown as it came.
-    private func inline(_ body: String) -> Text {
-        if let attributed = try? AttributedString(
-            markdown: body,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            return Text(attributed)
+    private func inline(_ body: String) -> Text { inlineMarkdown(body) }
+}
+
+/// Bold, italics, code spans, and links. A message the parser cannot read is shown as it came.
+private func inlineMarkdown(_ body: String) -> Text {
+    if let attributed = try? AttributedString(
+        markdown: body,
+        options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+    ) {
+        return Text(attributed)
+    }
+    return Text(body)
+}
+
+/// A pipe table as a grid: a bold header, a hairline under each row, and cells in the body font.
+///
+/// The grid scrolls sideways on its own, as a code block does, so a wide table never makes the
+/// conversation scroll sideways. A long cell wraps, so one sentence does not push every other
+/// column off the screen. Only the first rows are laid out, because an agent will happily emit a
+/// table of every file it touched and a grid's cost grows with its cells.
+private struct AgentTableView: View {
+    let header: [String]
+    let alignments: [AgentMarkdownColumnAlignment]
+    let rows: [[String]]
+
+    private static let rowLimit = 60
+    private static let cellWidthLimit: CGFloat = 260
+    private static let wrappingCharacterCount = 36
+
+    var body: some View {
+        let shown = Array(rows.prefix(Self.rowLimit))
+        ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 0) {
+                GridRow {
+                    ForEach(Array(header.enumerated()), id: \.offset) { column, text in
+                        cell(text, column: column, isHeader: true)
+                            .gridColumnAlignment(horizontalAlignment(column))
+                    }
+                }
+                Divider().gridCellUnsizedAxes(.horizontal)
+                ForEach(Array(shown.enumerated()), id: \.offset) { index, row in
+                    GridRow {
+                        ForEach(Array(row.enumerated()), id: \.offset) { column, text in
+                            cell(text, column: column, isHeader: false)
+                        }
+                    }
+                    if index < shown.count - 1 {
+                        Divider().gridCellUnsizedAxes(.horizontal)
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .accessibilityIdentifier("agent.table")
         }
-        return Text(body)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        if rows.count > Self.rowLimit {
+            Text("… \(rows.count - Self.rowLimit) more rows")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// A cell wraps once it is longer than a phone is wide; a shorter one keeps its natural width.
+    ///
+    /// The grid sizes every row from its cells' ideal sizes, so a cap on width has to be the ideal
+    /// width too, or a long cell wraps inside a row measured for one line. But an ideal width is
+    /// what a frame reports when nothing is proposed, so a short cell given the cap would be as
+    /// wide as the cap, and every column would be. The length of the text decides which it gets.
+    private func cell(_ text: String, column: Int, isHeader: Bool) -> some View {
+        let wraps = text.count > Self.wrappingCharacterCount
+        return inlineMarkdown(text)
+            .fontWeight(isHeader ? .semibold : .regular)
+            .multilineTextAlignment(textAlignment(column))
+            .frame(
+                idealWidth: wraps ? Self.cellWidthLimit : nil,
+                maxWidth: wraps ? Self.cellWidthLimit : nil,
+                alignment: Alignment(horizontal: horizontalAlignment(column), vertical: .center)
+            )
+            .padding(.vertical, 6)
+    }
+
+    private func alignment(_ column: Int) -> AgentMarkdownColumnAlignment {
+        column < alignments.count ? alignments[column] : .leading
+    }
+
+    private func horizontalAlignment(_ column: Int) -> HorizontalAlignment {
+        switch alignment(column) {
+        case .leading: .leading
+        case .center: .center
+        case .trailing: .trailing
+        }
+    }
+
+    private func textAlignment(_ column: Int) -> TextAlignment {
+        switch alignment(column) {
+        case .leading: .leading
+        case .center: .center
+        case .trailing: .trailing
+        }
     }
 }
 
