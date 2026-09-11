@@ -636,27 +636,34 @@ must state rather than discover.
 ### The Latest tab
 
 The bell on the Mac lists the agents that finished, or asked a question, in a tab the user was not
-looking at. The device shows that list as its second tab, **Latest**, with the unread count as a badge.
-The host sends the Mac's backlog whole in a `notifications` message, on connect and again whenever it
-changes, the same way it sends the tree. Each entry carries the workspace and tab titles, because a
-device keeps entries after the Mac has dropped them, and by then the tab may be gone from the tree.
+looking at. The Mac also keeps what it has listed once the user has caught up, as read history, and
+what an agent said in the tab the user was looking at, filed read from the start, so the record is
+complete without the bell ringing for it. The history is capped at 200 entries, forgets the oldest
+read entries first, and is saved beside the workspace state; what comes back after a relaunch comes
+back read, because the agents it pointed at went with the processes.
+
+The device shows that history as its second tab, **Latest**, with the unread count as a badge. The host
+sends the Mac's history whole in a `notifications` message, read and unread, newest first, on connect
+and again whenever it changes, the same way it sends the tree. Each entry carries the workspace and tab
+titles, because a device keeps entries after the Mac has forgotten them, and by then the tab may be gone
+from the tree.
 
 The device keeps its own log, newest first, capped at 200 entries, and it persists between launches.
-Each host snapshot is merged into it: an entry the device has not seen is new and unread, an entry the
-Mac still lists keeps its read mark and takes the Mac's current names, and an entry the Mac has dropped
-stays in the list as read history. An entry is a tab and a moment, so a tab that needs the user again is
-a new unread row rather than a resurrected old one. Opening a row lands on the same screen the workspace
-list opens for that tab, and reads it. Rows can be swiped read or unread, and the toolbar marks all as
-read.
+Each host snapshot is merged into it: an entry the device has not seen is new, and as read as the Mac
+says, so a device that connects after the user caught up at the desk still sees what happened, marked
+read; an entry the Mac still lists takes the Mac's current names and is read if either side has read
+it; and an entry the Mac has forgotten stays in the list as read history. An entry is a tab and a
+moment, so a tab that needs the user again is a new unread row rather than a resurrected old one.
+Opening a row lands on the same screen the workspace list opens for that tab, and reads it. Rows can be
+swiped read or unread, and the toolbar marks all as read.
 
 Reading on the device changes nothing on the Mac. Whether a tab read on the phone should lose its dot on
-the Mac is not yet decided, so for now the Mac is the only place that reads its own backlog.
+the Mac is not yet decided, so for now the Mac is the only place that reads its own backlog, and a Mac
+that still lists an entry unread cannot undo a read made on the device.
 
-The tab is only ever as full as the Mac's backlog was while the device was connected. An agent that
-finished in front of the user was never filed, and one the user reached before the device connected has
-already been dropped, so a device that connects afterwards sees nothing of either. A Mac running a MyTerm
-from before this tab never sends the message at all, and the device shows an empty inbox rather than
-waiting on it.
+A Mac running a MyTerm from before this tab never sends the message at all, and the device shows an empty
+inbox rather than waiting on it. A Mac from before the history sends only its unread backlog, without
+read marks, and the device treats every entry it sends as unread, which is what they are.
 
 Push is not in this plan. It becomes cheap later rather than expensive, because the relay already holds
 a connection to the host and a relationship with the device. Adding a contentless push is then a feature

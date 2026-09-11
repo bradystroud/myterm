@@ -185,10 +185,32 @@ final class CompanionFlowTests: XCTestCase {
         XCTAssertTrue(waitForUnread(0, badge: latestTab, in: app), "marking all as read clears the badge")
         snap(app, "73-latest-all-read")
 
-        // The user reaches every tab on the Mac. The Mac's list empties; the device's history stays.
+        // The user reaches every tab on the Mac. The Mac keeps them as history, and so does the device.
         try tellHost("read")
         XCTAssertEqual(rows.count, 3)
         XCTAssertFalse(app.staticTexts["Nothing Yet"].exists)
+    }
+
+    /// The Mac remembers what the user has already caught up on, so a device that connects only
+    /// afterwards still sees it: as history, read, with nothing to badge.
+    @MainActor
+    func testADeviceConnectingAfterTheMacReadItsBacklogStillSeesItAsHistory() throws {
+        try tellHost("read")
+        defer { try? tellHost("restore") }
+        let app = launch(connecting: true)
+        expectConnected(app)
+        let latestTab = latestTab(in: app)
+        if !isPad {
+            XCTAssertNil((latestTab.value as? String).flatMap { $0.isEmpty ? nil : $0 }, "nothing is unread")
+        }
+        latestTab.tap()
+        XCTAssertTrue(app.navigationBars["Latest"].waitForExistence(timeout: 5))
+        let rows = app.buttons.matching(identifier: "latest.row")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(rows.count, 2, "what the Mac read before this device connected is still listed")
+        XCTAssertTrue(waitForUnread(0, badge: latestTab, in: app), "and all of it is read")
+        XCTAssertFalse(app.buttons["latest.markAllRead"].isEnabled)
+        snap(app, "77-latest-read-history")
     }
 
     /// A Mac with nothing waiting sends an empty backlog, which is an empty inbox and nothing
@@ -196,7 +218,7 @@ final class CompanionFlowTests: XCTestCase {
     /// swallow what comes next.
     @MainActor
     func testAnEmptyBacklogIsAnEmptyInboxUntilSomethingHappens() throws {
-        try tellHost("read")
+        try tellHost("clear")
         defer { try? tellHost("restore") }
         let app = launch(connecting: true)
         expectConnected(app)

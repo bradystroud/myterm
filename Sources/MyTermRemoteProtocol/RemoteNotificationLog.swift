@@ -3,9 +3,10 @@ import MyTermCore
 
 /// One thing that happened, as a device remembers it.
 ///
-/// The Mac keeps one entry per tab and drops it once the user reaches the tab. A device keeps
-/// every entry it has seen, so the person can scroll back through what happened, and it keeps its
-/// own read mark, because reading on the phone is not reaching the tab on the Mac.
+/// The Mac keeps its own history and says which of it the user has reached. A device keeps every
+/// entry it has seen as well, so the person can scroll back through what happened even after the
+/// Mac has forgotten it, and it keeps its own read mark, because reading on the phone is not
+/// reaching the tab on the Mac.
 public struct RemoteNotificationLogEntry: Codable, Equatable, Sendable, Identifiable {
     /// The tab and the moment together. A tab that needs the user again is a new entry, so a read
     /// one can never swallow the next thing the same tab has to say.
@@ -58,12 +59,14 @@ public struct RemoteNotificationLog: Codable, Equatable, Sendable {
     public var unreadCount: Int { entries.filter { !$0.isRead }.count }
     public var isEmpty: Bool { entries.isEmpty }
 
-    /// Folds the Mac's current backlog into what the device already knows.
+    /// Folds the Mac's current history into what the device already knows.
     ///
-    /// An entry the Mac lists and the device has not seen is new, and unread. One the device already
-    /// has keeps its read mark and takes the Mac's current names, so a renamed tab renames the row.
-    /// One the device has that the Mac no longer lists was reached on the Mac, or the agent moved
-    /// on, so it is read: either way the person has nothing left to do about it.
+    /// An entry the Mac lists and the device has not seen is new, and as read as the Mac says: one
+    /// the user reached on the Mac before the device connected arrives as history. One the device
+    /// already has takes the Mac's current names, so a renamed tab renames the row, and is read if
+    /// either side has read it: reading on the device is not undone by a Mac that does not know.
+    /// One the device has that the Mac no longer lists was forgotten there, or the agent moved on,
+    /// so it is read: either way the person has nothing left to do about it.
     public mutating func merge(_ snapshot: RemoteNotifications) {
         let listed = Set(snapshot.entries.map { RemoteNotificationLogEntry.ID(tabID: $0.tabID, date: $0.date) })
         var merged = entries
@@ -73,10 +76,10 @@ public struct RemoteNotificationLog: Codable, Equatable, Sendable {
         for notification in snapshot.entries {
             let id = RemoteNotificationLogEntry.ID(tabID: notification.tabID, date: notification.date)
             if let index = merged.firstIndex(where: { $0.id == id }) {
-                let isRead = merged[index].isRead
+                let isRead = merged[index].isRead || notification.isRead
                 merged[index] = RemoteNotificationLogEntry(notification, isRead: isRead)
             } else {
-                merged.append(RemoteNotificationLogEntry(notification))
+                merged.append(RemoteNotificationLogEntry(notification, isRead: notification.isRead))
             }
         }
         entries = Self.trimmed(merged)

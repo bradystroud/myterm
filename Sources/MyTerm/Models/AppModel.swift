@@ -80,9 +80,14 @@ final class AppModel {
         guard agentNotifications.isEnabled else { return }
         _ = agentNotificationPoster
     }
-    /// The agents that finished, or asked a question, while the user was looking somewhere else.
-    /// Runtime only: an entry that survived a relaunch would point at work the user has moved on from.
-    var agentInbox = AgentNotificationInbox()
+    /// The agents that finished, or asked a question, while the user was looking somewhere else,
+    /// and the history of what they did before. Saved beside the workspace state; what comes back
+    /// after a relaunch comes back read, because the agents it pointed at went with the processes.
+    var agentInbox = AgentNotificationInbox() {
+        didSet { persistAgentInbox() }
+    }
+    /// Where the history lives between launches, beside the workspace state.
+    @ObservationIgnored let agentInboxURL: URL
     /// Whether the notifications popover is open. The toolbar bell and the menu command share it.
     var isAgentNotificationsPresented = false
     /// Tabs that have an agent in them, by agent name, as the hooks last reported.
@@ -156,7 +161,13 @@ final class AppModel {
     ) throws {
         self.channel = channel
         let supportDirectory = try applicationSupportDirectory ?? Self.applicationSupportDirectory()
-        store = try WorkspaceStore(persistenceURL: channel.persistenceURL(applicationSupportDirectory: supportDirectory))
+        let persistenceURL = channel.persistenceURL(applicationSupportDirectory: supportDirectory)
+        store = try WorkspaceStore(persistenceURL: persistenceURL)
+        agentInboxURL = persistenceURL.deletingLastPathComponent()
+            .appending(path: "agent-notifications.json", directoryHint: .notDirectory)
+        var savedInbox = Self.loadAgentInbox(from: agentInboxURL)
+        savedInbox.markAllRead()
+        agentInbox = savedInbox
         recoveryNotice = WorkspaceRecoveryNotice(loadReport: store.loadReport)
         self.browserSettings = browserSettings ?? BrowserSettingsStore(channel: channel)
         recentWorkspaceEmojis = self.browserSettings.recentWorkspaceEmojis

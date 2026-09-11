@@ -109,9 +109,9 @@ private final class DemoDataSource: RemoteHostDataSource {
 
     /// The backlog a device sees on connect: the two demo tabs whose cook asks for the user.
     ///
-    /// Newest first, as the Mac's bell lists it. `fileNotification` and `readAll` are what the UI
-    /// tests drive through the control file, standing in for an agent finishing and for the user
-    /// reaching the tab on the Mac.
+    /// Newest first, as the Mac's bell lists it. `fileNotification`, `readAll` and `forgetAll` are
+    /// what the UI tests drive through the control file, standing in for an agent finishing, for
+    /// the user reaching the tab on the Mac, and for a Mac with no history.
     private(set) var notifications = backlogFixture
 
     private static let backlogFixture = RemoteNotifications(entries: [
@@ -159,8 +159,15 @@ private final class DemoDataSource: RemoteHostDataSource {
         )
     }
 
-    /// The user reached every waiting tab on the Mac.
+    /// The user reached every waiting tab on the Mac. The Mac keeps what it read, as history.
     func readAll() {
+        for index in notifications.entries.indices {
+            notifications.entries[index].isRead = true
+        }
+    }
+
+    /// A Mac with no history at all, as after a fresh install.
+    func forgetAll() {
         notifications.entries.removeAll()
     }
 
@@ -399,6 +406,9 @@ final class RemoteHostDemo: XCTestCase {
             service.broadcast(notifications: source.notifications)
         case "read":
             source.readAll()
+            service.broadcast(notifications: source.notifications)
+        case "clear":
+            source.forgetAll()
             service.broadcast(notifications: source.notifications)
         case "restore":
             source.restoreBacklog()

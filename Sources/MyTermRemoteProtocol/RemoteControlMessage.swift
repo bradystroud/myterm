@@ -276,7 +276,7 @@ public struct RemoteAgentActivity: Codable, Equatable, Sendable {
     public var needsAttention: Bool { activity?.needsAttention ?? false }
 }
 
-/// One agent waiting for the user, as the Mac's bell lists it.
+/// One thing an agent did, as the Mac's bell lists it or remembers it.
 ///
 /// The titles travel with the entry rather than being looked up in the tree. A device keeps an
 /// entry after the Mac has dropped it, and by then the tab it named may be gone from the tree too.
@@ -288,6 +288,9 @@ public struct RemoteNotification: Codable, Equatable, Sendable {
     public var activity: AgentActivity
     /// When the event that produced this entry arrived on the Mac.
     public var date: Date
+    /// Whether the user has reached the tab on the Mac. Absent from a Mac that kept no history,
+    /// which only ever sent what was unread, so absent reads as unread.
+    public var isRead: Bool
 
     public init(
         tabID: String,
@@ -295,7 +298,8 @@ public struct RemoteNotification: Codable, Equatable, Sendable {
         workspaceTitle: String,
         tabTitle: String,
         activity: AgentActivity,
-        date: Date
+        date: Date,
+        isRead: Bool = false
     ) {
         self.tabID = tabID
         self.workspaceID = workspaceID
@@ -303,13 +307,26 @@ public struct RemoteNotification: Codable, Equatable, Sendable {
         self.tabTitle = tabTitle
         self.activity = activity
         self.date = date
+        self.isRead = isRead
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        tabID = try container.decode(String.self, forKey: .tabID)
+        workspaceID = try container.decode(String.self, forKey: .workspaceID)
+        workspaceTitle = try container.decode(String.self, forKey: .workspaceTitle)
+        tabTitle = try container.decode(String.self, forKey: .tabTitle)
+        activity = try container.decode(AgentActivity.self, forKey: .activity)
+        date = try container.decode(Date.self, forKey: .date)
+        isRead = try container.decodeIfPresent(Bool.self, forKey: .isRead) ?? false
     }
 }
 
-/// The Mac's whole backlog, newest first, sent on connect and again whenever it changes.
+/// The Mac's whole history, read and unread, newest first, sent on connect and again whenever it
+/// changes.
 ///
-/// Whole rather than a delta, for the same reason the tree is: an entry the Mac has read is one
-/// that is simply not in the next snapshot, and a device works out the difference itself.
+/// Whole rather than a delta, for the same reason the tree is: an entry the Mac has forgotten is
+/// one that is simply not in the next snapshot, and a device works out the difference itself.
 public struct RemoteNotifications: Codable, Equatable, Sendable {
     public var entries: [RemoteNotification]
 
