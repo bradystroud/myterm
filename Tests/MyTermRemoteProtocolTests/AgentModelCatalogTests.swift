@@ -60,51 +60,6 @@ final class AgentModelCatalogTests: XCTestCase {
         XCTAssertEqual(Set(AgentModelCatalog.choices.map(\.label)).count, AgentModelCatalog.choices.count)
     }
 
-    // MARK: - The limit notice
-
-    func testTheAgentsLimitNoticeIsRecognised() {
-        // Verbatim from a transcript, written as an assistant turn with a synthetic model.
-        XCTAssertTrue(AgentModelCatalog.isUsageLimitNotice(
-            "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."
-        ))
-        XCTAssertTrue(AgentModelCatalog.isUsageLimitNotice(
-            "You've reached your Opus limit. Switch models with /model."
-        ))
-    }
-
-    func testOrdinaryTalkAboutModelsIsNotANotice() {
-        XCTAssertFalse(AgentModelCatalog.isUsageLimitNotice("I switched to /model opus as you asked."))
-        XCTAssertFalse(AgentModelCatalog.isUsageLimitNotice("You've reached your goal. The limit was 5."))
-        XCTAssertFalse(AgentModelCatalog.isUsageLimitNotice(""))
-    }
-
-    func testAConversationIsStoppedOnTheNoticeOnlyWhileItIsTheAgentsLastTurn() {
-        let notice = "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."
-        let stopped: [RemoteAgentEntry] = [
-            RemoteAgentEntry(id: "a1", role: .assistant, blocks: [.text("Working on it.")], model: "claude-fable-5-1"),
-            RemoteAgentEntry(id: "a2", role: .assistant, blocks: [.text(notice)]),
-        ]
-        XCTAssertEqual(AgentModelCatalog.usageLimitNotice(in: stopped), notice)
-
-        let personReplied = stopped + [RemoteAgentEntry(id: "u1", role: .user, blocks: [.text("continue")])]
-        XCTAssertEqual(AgentModelCatalog.usageLimitNotice(in: personReplied), notice, "a reply alone does not lift it")
-
-        let switched = stopped + [RemoteAgentEntry(
-            id: "c1", role: .user, blocks: [.localCommand(RemoteAgentLocalCommand(name: "/model", args: "opus"))]
-        )]
-        XCTAssertNil(AgentModelCatalog.usageLimitNotice(in: switched), "switching is what the notice asked for")
-
-        let movedOn = stopped + [RemoteAgentEntry(id: "a3", role: .assistant, blocks: [.text("Back.")], model: "claude-opus-5")]
-        XCTAssertNil(AgentModelCatalog.usageLimitNotice(in: movedOn))
-
-        let working = stopped + [RemoteAgentEntry(
-            id: "a4", role: .assistant,
-            blocks: [.toolUse(RemoteAgentToolUse(id: "t", name: "Bash", summary: "ls", detail: ""))],
-            model: "claude-opus-5"
-        )]
-        XCTAssertNil(AgentModelCatalog.usageLimitNotice(in: working), "a tool call means the agent is going again")
-    }
-
     func testTheModelInUseIsTheLastTurnThatNamedOne() {
         let conversation = RemoteAgentConversation(tabID: "tab", agent: "claude", entries: [
             RemoteAgentEntry(id: "a1", role: .assistant, blocks: [.text("hi")], model: "claude-fable-5-1"),

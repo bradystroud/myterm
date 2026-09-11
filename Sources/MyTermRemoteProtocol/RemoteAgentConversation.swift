@@ -51,6 +51,9 @@ public struct RemoteAgentEntries: Codable, Equatable, Sendable {
 public enum RemoteAgentRole: String, Codable, Equatable, Sendable {
     case user
     case assistant
+    /// Neither side of the talk: a command the person ran in the agent's interface, or a note
+    /// from the agent's own machinery.
+    case system
 }
 
 /// One turn, identified by the agent's own entry identifier so a device can drop a repeat.
@@ -87,6 +90,23 @@ extension RemoteAgentConversation {
     /// conversation, so it follows the tail without a message of its own.
     public var currentModel: String? {
         entries.last { $0.model != nil }?.model
+    }
+}
+
+/// A note from the agent's own machinery rather than either side of the talk: the conversation
+/// was compacted, a model was swapped for another, a connection dropped.
+public struct RemoteAgentNote: Codable, Equatable, Sendable {
+    public enum Level: String, Codable, Equatable, Sendable {
+        case info
+        case warning
+    }
+
+    public var text: String
+    public var level: Level
+
+    public init(text: String, level: Level = .info) {
+        self.text = text
+        self.level = level
     }
 }
 
@@ -200,13 +220,15 @@ public enum RemoteAgentBlock: Codable, Equatable, Sendable {
     case image
     /// A command run in the agent's interface, not a message to it.
     case localCommand(RemoteAgentLocalCommand)
+    /// A note from the agent's machinery, not a message from it.
+    case note(RemoteAgentNote)
 
     private enum Kind: String, Codable {
-        case text, thinking, toolUse, toolResult, image, localCommand
+        case text, thinking, toolUse, toolResult, image, localCommand, note
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, text, thinking, toolUse, toolResult, localCommand
+        case type, text, thinking, toolUse, toolResult, localCommand, note
     }
 
     public init(from decoder: Decoder) throws {
@@ -224,6 +246,8 @@ public enum RemoteAgentBlock: Codable, Equatable, Sendable {
             self = .image
         case .localCommand:
             self = .localCommand(try container.decode(RemoteAgentLocalCommand.self, forKey: .localCommand))
+        case .note:
+            self = .note(try container.decode(RemoteAgentNote.self, forKey: .note))
         }
     }
 
@@ -247,6 +271,9 @@ public enum RemoteAgentBlock: Codable, Equatable, Sendable {
         case .localCommand(let value):
             try container.encode(Kind.localCommand, forKey: .type)
             try container.encode(value, forKey: .localCommand)
+        case .note(let value):
+            try container.encode(Kind.note, forKey: .type)
+            try container.encode(value, forKey: .note)
         }
     }
 }

@@ -89,36 +89,4 @@ public enum AgentModelCatalog {
     }
 
     private static let families: Set<String> = ["fable", "opus", "sonnet", "haiku"]
-
-    // MARK: - The notice that makes switching worth offering
-
-    /// Whether an assistant turn is the agent saying it has run out of one model's usage and
-    /// pointing at `/model`. Matched loosely on the words that carry the meaning, because the
-    /// exact wording names the model and changes between builds.
-    public static func isUsageLimitNotice(_ text: String) -> Bool {
-        let lowered = text.lowercased()
-        return lowered.contains("reached your")
-            && lowered.contains("limit")
-            && lowered.contains("/model")
-    }
-
-    /// The notice a conversation is stopped on, if it is.
-    ///
-    /// It is the agent's last turn and nothing has been done about it: a `/model` run after the
-    /// notice means the person has already switched, and offering to again would be noise.
-    public static func usageLimitNotice(in entries: [RemoteAgentEntry]) -> String? {
-        for entry in entries.reversed() {
-            for block in entry.blocks {
-                if case .localCommand(let command) = block, command.name == "/model" {
-                    return nil
-                }
-            }
-            guard entry.role == .assistant else { continue }
-            let text = entry.blocks.compactMap { block -> String? in
-                if case .text(let value) = block { return value } else { return nil }
-            }.joined(separator: "\n")
-            return isUsageLimitNotice(text) ? text : nil
-        }
-        return nil
-    }
 }
