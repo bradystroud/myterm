@@ -385,4 +385,52 @@ final class RemoteProtocolTests: XCTestCase {
         let entry = try JSONDecoder().decode(RemoteAgentEntry.self, from: Data(json.utf8))
         XCTAssertNil(entry.model)
     }
+
+    /// A command's output is prose unless it says it is a screen, and one that does not say so
+    /// still reads.
+    func testACommandThatDoesNotSayItIsAScreenIsNot() throws {
+        let json = #"{"name":"/model","args":"opus","output":"Set model to Opus 5","isError":false}"#
+        let command = try JSONDecoder().decode(RemoteAgentLocalCommand.self, from: Data(json.utf8))
+        XCTAssertFalse(command.isScreen)
+    }
+
+    // MARK: - A command whose answer is on the screen
+
+    func testAScreenAndItsDismissalSurviveTheWire() throws {
+        let screen = RemoteAgentScreen(
+            tabID: "tab-1",
+            id: "capture-7",
+            command: RemoteAgentLocalCommand(
+                name: "/usage",
+                output: "Settings  Status   Config   Usage   Stats\n\nSession\n\nTotal cost:  $0.0000",
+                isScreen: true
+            ),
+            isShowing: true
+        )
+        for message in [
+            RemoteControlMessage.agentScreen(screen),
+            .agentScreen(RemoteAgentScreen(tabID: "tab-1", id: "capture-7", command: screen.command, isShowing: false)),
+            .agentScreen(RemoteAgentScreen(
+                tabID: "tab-1",
+                id: "capture-8",
+                command: RemoteAgentLocalCommand(name: "/help", isScreen: true),
+                isShowing: false
+            )),
+            .dismissAgentScreen(RemoteDismissAgentScreen(tabID: "tab-1")),
+        ] {
+            let decoded = try RemoteControlCodec.decode(RemoteControlCodec.encode(message))
+            XCTAssertEqual(decoded, message)
+        }
+    }
+
+    /// The dismissal names a tab and nothing else: no keystroke and no session travels from a device.
+    func testADismissalCarriesOnlyTheTab() throws {
+        let frame = try RemoteControlCodec.encode(.dismissAgentScreen(RemoteDismissAgentScreen(tabID: "tab-1")))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(frame.payload)) as? [String: Any])
+        let body = try XCTUnwrap(json["dismissAgentScreen"] as? [String: Any])
+
+        XCTAssertEqual(json["type"] as? String, "dismissAgentScreen")
+        XCTAssertEqual(body.keys.sorted(), ["tabID"])
+        XCTAssertEqual(body["tabID"] as? String, "tab-1")
+    }
 }

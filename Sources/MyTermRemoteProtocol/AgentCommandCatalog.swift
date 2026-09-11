@@ -34,8 +34,9 @@ public enum AgentCommandCatalog {
     public enum Outcome: Equatable, Sendable {
         /// The transcript records the command and what it printed, so the conversation shows it.
         case transcript
-        /// The command draws a dialog on the Mac's screen and writes nothing. The phone can only
-        /// say so and offer the terminal.
+        /// The command draws a dialog on the Mac's screen and writes nothing. The host reads the
+        /// screen once it has settled and sends that as the output; the phone shows it and offers
+        /// to dismiss the dialog, and falls back to naming the Mac when nothing could be read.
         case screen
         /// The command starts a new session. The transcript moves to a new file, and the host
         /// follows it; the conversation on the phone starts over.
@@ -169,6 +170,16 @@ public enum AgentCommandCatalog {
             return .macOnly(command)
         }
         return .unknown(name: name)
+    }
+
+    /// The command a typed line runs when its answer will be drawn on the Mac's screen and
+    /// written nowhere, so the host knows to read the screen once the line has gone in.
+    ///
+    /// Only the runnable ones. A picker typed bare opens on the Mac too, but what it draws is a
+    /// menu to operate, not an answer to read.
+    public static func screenCommand(typed text: String) -> Command? {
+        guard case .runnable(let command) = typed(text), command.outcome == .screen else { return nil }
+        return command
     }
 
     // MARK: - Notes on what ran

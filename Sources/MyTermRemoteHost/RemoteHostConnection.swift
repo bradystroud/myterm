@@ -8,6 +8,13 @@ private final class AttachedSessionRoute {
     var session: UUID?
 }
 
+/// A dialog as it was read off a tab's screen, kept until it is seen to have gone.
+private struct CapturedScreen {
+    let id: String
+    let command: AgentCommandCatalog.Command
+    let rows: [String]
+}
+
 /// One connected device.
 ///
 /// The pre-shared key proves the device holds the pairing token, so the handshake completing is the
@@ -42,6 +49,9 @@ final class RemoteHostConnection {
     /// What was last sent to the device for each followed tab, so the same prompt is not pushed
     /// again on every poll.
     private var agentPromptOptions: [String: [RemoteAgentPromptOption]] = [:]
+    /// The dialog a screen-only command drew on each followed tab, as it was read, so a dismissal
+    /// can be checked against it.
+    private var agentScreens: [String: CapturedScreen] = [:]
     private var pendingBytes = 0
     private var sessionsNeedingResync = Set<UUID>()
 
@@ -265,6 +275,7 @@ final class RemoteHostConnection {
         case .detachAgent(let request):
             agentWatchers.removeValue(forKey: request.tabID)?.stop()
             agentPromptOptions.removeValue(forKey: request.tabID)
+            agentScreens.removeValue(forKey: request.tabID)
 
         case .agentReply(let request):
             // Typing into an agent reaches as far as typing into its terminal does, so it is gated
@@ -286,9 +297,21 @@ final class RemoteHostConnection {
             }
             // The data source is held, not the connection: a device that drops the instant it
             // sends must still get its words submitted rather than left sitting in the draft.
-            Task { @MainActor in
+            let screenCommand = AgentCommandCatalog.screenCommand(typed: request.text)
+            Task { @MainActor [weak self] in
                 try? await Task.sleep(for: Self.replyReturnDelay)
+                // The screen the Return goes into, read first: the capture must see it move on.
+                let before = screenCommand == nil ? nil : dataSource.visibleRows(tabID: request.tabID)
                 _ = dataSource.sendInput(tabID: request.tabID, bytes: Self.returnKeystroke[...])
+                // The answer to this one is drawn, not written, so it is read off the screen
+                // for the device that asked. A device that has gone has nobody to read it for.
+                guard let screenCommand else { return }
+                await self?.captureScreen(
+                    drawnBy: screenCommand,
+                    tabID: request.tabID,
+                    before: before,
+                    dataSource: dataSource
+                )
             }
 
         case .agentAnswer(let request):
@@ -297,6 +320,13 @@ final class RemoteHostConnection {
                 return
             }
             answer(request)
+
+        case .dismissAgentScreen(let request):
+            guard didGreet, allowsInput() else {
+                sendControl(.error(RemoteError(code: "denied", message: "is not taking input from devices")))
+                return
+            }
+            dismissScreen(tabID: request.tabID)
 
         case .renameTab(let request):
             applyMutation("rename tab") { $0.renameTab(tabID: request.tabID, title: request.title) }
@@ -323,7 +353,7 @@ final class RemoteHostConnection {
             }
 
         case .welcome, .tree, .attached, .resync, .agentActivity, .notifications,
-             .agentConversation, .agentEntries, .agentPrompt, .error:
+             .agentConversation, .agentEntries, .agentPrompt, .agentScreen, .error:
             // The host never receives these.
             break
         }
@@ -361,6 +391,71 @@ final class RemoteHostConnection {
         }
         _ = dataSource?.sendInput(tabID: request.tabID, bytes: keystrokes[...])
         pushPrompt(tabID: request.tabID, force: true)
+    }
+
+    /// Reads the dialog a screen-only command drew and sends it to the device as the command's
+    /// output. Sent even when nothing could be read, so the device can stop waiting and say the
+    /// answer is on the Mac.
+    private func captureScreen(
+        drawnBy command: AgentCommandCatalog.Command,
+        tabID: String,
+        before: [String]?,
+        dataSource: any RemoteHostDataSource
+    ) async {
+        let rows = await AgentScreenCapture.settledRows(
+            changedFrom: before,
+            read: { dataSource.visibleRows(tabID: tabID) },
+            sleep: { try await Task.sleep(for: $0) }
+        )
+        let output = rows.map(AgentScreenCapture.output(from:)) ?? ""
+        let id = UUID().uuidString
+        if let rows, !output.isEmpty {
+            agentScreens[tabID] = CapturedScreen(id: id, command: command, rows: rows)
+        } else {
+            agentScreens.removeValue(forKey: tabID)
+        }
+        sendControl(.agentScreen(RemoteAgentScreen(
+            tabID: tabID,
+            id: id,
+            command: RemoteAgentLocalCommand(name: command.name, output: output, isScreen: true),
+            isShowing: !output.isEmpty
+        )))
+    }
+
+    /// Closes the dialog a screen-only command drew, then looks to see that it went.
+    ///
+    /// Escape is sent whether or not a dialog was read: it is what the person asked for, and it is
+    /// as safe here as it is for a permission prompt. The look afterwards is what lets the device
+    /// keep offering to dismiss a dialog that did not take the hint.
+    private func dismissScreen(tabID: String) {
+        guard let dataSource,
+              dataSource.sendInput(tabID: tabID, bytes: AgentPermissionMenu.denyKeystrokes[...]) else {
+            sendControl(.error(RemoteError(code: "dismissAgentScreen", message: "has no terminal for that tab")))
+            return
+        }
+        guard let screen = agentScreens[tabID] else { return }
+        Task { @MainActor [weak self] in
+            let rows = await AgentScreenCapture.settledRows(
+                read: { dataSource.visibleRows(tabID: tabID) },
+                sleep: { try await Task.sleep(for: $0) }
+            )
+            // A screen that would not settle is one that moved on: a dialog holds still.
+            let isShowing = rows.map { AgentScreenCapture.stillShows(screen.rows, on: $0) } ?? false
+            guard let self else { return }
+            if !isShowing {
+                self.agentScreens.removeValue(forKey: tabID)
+            }
+            self.sendControl(.agentScreen(RemoteAgentScreen(
+                tabID: tabID,
+                id: screen.id,
+                command: RemoteAgentLocalCommand(
+                    name: screen.command.name,
+                    output: AgentScreenCapture.output(from: screen.rows),
+                    isScreen: true
+                ),
+                isShowing: isShowing
+            )))
+        }
     }
 
     /// Tells the device what the tab's screen is offering, when that has changed.

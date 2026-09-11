@@ -80,7 +80,20 @@ private final class FakeDataSource: RemoteHostDataSource {
     func sendInput(tabID: String, bytes: ArraySlice<UInt8>) -> Bool {
         guard tabID == Self.tabID else { return false }
         tabWrites.append(String(decoding: bytes, as: UTF8.self))
+        if bytes == RemoteHostConnection.returnKeystroke[...], let screenAfterReturn {
+            screenRows = screenAfterReturn
+        }
         return true
+    }
+
+    /// What the tab's grid shows. Nil is a tab whose screen cannot be read.
+    var screenRows: [String]? = AgentScreenFixtures.prompt
+    /// What the grid shows once a Return has gone in, the way a command's dialog appears after it.
+    var screenAfterReturn: [String]?
+
+    func visibleRows(tabID: String) -> [String]? {
+        guard tabID == Self.tabID else { return nil }
+        return screenRows
     }
 
     func snapshot(session: UUID) -> RemoteAttachment? {
@@ -161,6 +174,14 @@ private final class Collector: RemoteClientDelegate {
     func remoteClient(_ client: RemoteClient, didReceive notifications: RemoteNotifications) {
         self.notifications.append(notifications)
         onNotifications?()
+    }
+
+    var screens = [RemoteAgentScreen]()
+    var onScreen: (() -> Void)?
+
+    func remoteClient(_ client: RemoteClient, didReceive screen: RemoteAgentScreen) {
+        screens.append(screen)
+        onScreen?()
     }
 }
 
@@ -525,6 +546,126 @@ final class RemoteHostEndToEndTests: XCTestCase {
         client.disconnect()
     }
 
+    /// A screen-only command's answer is read off the grid and sent back as the command's output,
+    /// and a dismissal is the same Escape a permission deny sends, checked afterwards.
+    @MainActor
+    func testAScreenCommandIsReadOffTheScreenAndDismissedFromTheDevice() async throws {
+        let token = RemoteTransportSecurity.makeToken()
+        let source = FakeDataSource()
+        let (service, port) = try await startedService(token: token, dataSource: source)
+        defer { service.stop() }
+
+        let collector = Collector()
+        let client = RemoteClient(deviceName: "TestPad")
+        client.delegate = collector
+        let treeArrived = expectation(description: "tree")
+        collector.onTree = { treeArrived.fulfill() }
+        client.connect(host: "127.0.0.1", port: port, token: token)
+        await fulfillment(of: [treeArrived], timeout: 10)
+        collector.onTree = nil
+
+        // The dialog is on the grid by the time the host looks, as it is against the CLI.
+        source.screenAfterReturn = AgentScreenFixtures.status
+        let captured = expectation(description: "screen captured")
+        collector.onScreen = { captured.fulfill() }
+        client.replyToAgent(tabID: FakeDataSource.tabID, text: "/status")
+        await fulfillment(of: [captured], timeout: 10)
+
+        XCTAssertEqual(source.tabWrites, ["/status", "\r"], "the command is typed as any reply is")
+        guard let screen = collector.screens.last else { return XCTFail("no screen was sent") }
+        XCTAssertEqual(screen.tabID, FakeDataSource.tabID)
+        XCTAssertEqual(screen.command.name, "/status")
+        XCTAssertTrue(screen.command.isScreen)
+        XCTAssertTrue(screen.isShowing)
+        XCTAssertEqual(screen.command.output, AgentScreenCapture.output(from: AgentScreenFixtures.status))
+
+        // Dismissing sends Escape and nothing else, and while the dialog stays the device is told so.
+        let stillThere = expectation(description: "dialog still there")
+        collector.onScreen = { stillThere.fulfill() }
+        client.dismissAgentScreen(tabID: FakeDataSource.tabID)
+        await fulfillment(of: [stillThere], timeout: 10)
+
+        XCTAssertEqual(source.tabWrites.last, "\u{1B}")
+        XCTAssertEqual(collector.screens.last?.id, screen.id, "the same capture is reported on, not a new one")
+        XCTAssertEqual(collector.screens.last?.isShowing, true)
+
+        // Once the prompt is back, the dismissal is seen to have taken.
+        source.screenRows = AgentScreenFixtures.prompt
+        let gone = expectation(description: "dialog gone")
+        collector.onScreen = { gone.fulfill() }
+        client.dismissAgentScreen(tabID: FakeDataSource.tabID)
+        await fulfillment(of: [gone], timeout: 10)
+
+        XCTAssertEqual(collector.screens.last?.id, screen.id)
+        XCTAssertEqual(collector.screens.last?.isShowing, false)
+        XCTAssertEqual(source.tabWrites.filter { $0 == "\u{1B}" }.count, 2)
+
+        // A reply that is not a screen command is not followed by a read.
+        source.screenAfterReturn = AgentScreenFixtures.help
+        collector.onScreen = { XCTFail("words to the agent have no screen to read") }
+        client.replyToAgent(tabID: FakeDataSource.tabID, text: "thanks")
+        try await Task.sleep(nanoseconds: 2_500_000_000)
+        XCTAssertEqual(source.tabWrites.suffix(2), ["thanks", "\r"])
+
+        client.disconnect()
+    }
+
+    /// A screen that cannot be read still answers the device, with nothing, so it can stop waiting.
+    @MainActor
+    func testAScreenThatCannotBeReadIsReportedAsNothing() async throws {
+        let token = RemoteTransportSecurity.makeToken()
+        let source = FakeDataSource()
+        source.screenRows = nil
+        source.screenAfterReturn = nil
+        let (service, port) = try await startedService(token: token, dataSource: source)
+        defer { service.stop() }
+
+        let collector = Collector()
+        let client = RemoteClient(deviceName: "TestPad")
+        client.delegate = collector
+        let treeArrived = expectation(description: "tree")
+        collector.onTree = { treeArrived.fulfill() }
+        client.connect(host: "127.0.0.1", port: port, token: token)
+        await fulfillment(of: [treeArrived], timeout: 10)
+
+        let answered = expectation(description: "screen answered")
+        collector.onScreen = { answered.fulfill() }
+        client.replyToAgent(tabID: FakeDataSource.tabID, text: "/usage")
+        await fulfillment(of: [answered], timeout: 10)
+
+        XCTAssertEqual(collector.screens.last?.command.name, "/usage")
+        XCTAssertEqual(collector.screens.last?.command.output, "")
+        XCTAssertEqual(collector.screens.last?.isShowing, false)
+
+        client.disconnect()
+    }
+
+    /// Dismissing is a keystroke on the Mac, so it is refused where typing is.
+    @MainActor
+    func testDismissingIsRefusedWhenTheMacDoesNotAllowInput() async throws {
+        let token = RemoteTransportSecurity.makeToken()
+        let source = FakeDataSource()
+        let (service, port) = try await startedService(token: token, dataSource: source, allowsInput: false)
+        defer { service.stop() }
+
+        let collector = Collector()
+        let client = RemoteClient(deviceName: "TestPad")
+        client.delegate = collector
+        let treeArrived = expectation(description: "tree")
+        collector.onTree = { treeArrived.fulfill() }
+        client.connect(host: "127.0.0.1", port: port, token: token)
+        await fulfillment(of: [treeArrived], timeout: 10)
+
+        client.dismissAgentScreen(tabID: FakeDataSource.tabID)
+        for _ in 0..<100 where client.lastError == nil {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTAssertEqual(client.lastError?.code, "denied")
+        XCTAssertTrue(source.tabWrites.isEmpty, "no Escape may reach the tab while input is refused")
+        client.disconnect()
+    }
+
     @MainActor
     func testASecondMacOnTheSamePortStillGetsAPort() async throws {
         // A saved Mac stays reachable because the port is fixed; two hosts on one machine is the
@@ -561,6 +702,9 @@ final class RemoteHostEndToEndTests: XCTestCase {
         collector.onTree = { treeArrived.fulfill() }
         client.connect(host: "127.0.0.1", port: port, token: token)
         await fulfillment(of: [treeArrived], timeout: 10)
+        // The host sends the tree again on its first poll, a second on. Fulfilling a fulfilled
+        // expectation is an XCTest violation that takes the async test machinery down with it.
+        collector.onTree = nil
 
         // Sent as raw messages rather than through `RemoteClient`, whose own helpers decline to send
         // these at all. Hiding a control is not a permission check, so this proves the host refuses

@@ -123,12 +123,31 @@ public struct RemoteAgentLocalCommand: Codable, Equatable, Sendable {
     public var output: String
     /// True when the output came from the command's error stream.
     public var isError: Bool
+    /// True when the output is the Mac's screen rather than what the command printed: rows read
+    /// off the grid, which only line up in a fixed-width face. A device shows it as a screen,
+    /// not as prose.
+    public var isScreen: Bool
 
-    public init(name: String, args: String = "", output: String = "", isError: Bool = false) {
+    public init(name: String, args: String = "", output: String = "", isError: Bool = false, isScreen: Bool = false) {
         self.name = name
         self.args = args
         self.output = output
         self.isError = isError
+        self.isScreen = isScreen
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, args, output, isError, isScreen
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        args = try container.decode(String.self, forKey: .args)
+        output = try container.decode(String.self, forKey: .output)
+        isError = try container.decode(Bool.self, forKey: .isError)
+        // Optional on the wire: a command whose output was printed need not say it was not a screen.
+        isScreen = try container.decodeIfPresent(Bool.self, forKey: .isScreen) ?? false
     }
 }
 
@@ -365,5 +384,52 @@ public struct RemoteAgentAnswer: Codable, Equatable, Sendable {
         self.tabID = tabID
         self.isDeny = isDeny
         self.option = option
+    }
+}
+
+// MARK: - A command whose answer is on the screen
+
+/// What a screen-only command drew on the Mac, read off the tab's grid once it stopped changing.
+///
+/// `/usage`, `/status` and `/help` write nothing to the transcript: their answer exists on the
+/// screen and nowhere else. This is its own message rather than an entry slipped into
+/// `agentEntries`, because the transcript is the agent's record and the host only relays it; an
+/// entry the agent never wrote would have the host putting words in that record, and a device
+/// that re-attached would find the row gone. It is the same kind of message as `agentPrompt`:
+/// something read off the screen, pushed each time the host looks, and marked gone once it is.
+/// The device puts it in the conversation itself, as the command's row, the way `/model`'s shows.
+///
+/// What the screen says is what the device could already read through the terminal view: the
+/// `/status` dialog names the session and the working directory, and so does the grid. Nothing
+/// here reaches a device that has not asked for this tab and typed the command.
+public struct RemoteAgentScreen: Codable, Equatable, Sendable {
+    public var tabID: String
+    /// Names one capture. The host reports the same dialog again after a dismissal, and the
+    /// device must add its row once, not once per report.
+    public var id: String
+    /// The command that drew it, with the screen as its output. Empty output means the screen
+    /// never settled, or showed nothing: the device can only say the answer is on the Mac.
+    public var command: RemoteAgentLocalCommand
+    /// Whether the dialog is still up. False once a dismissal has been seen to take.
+    public var isShowing: Bool
+
+    public init(tabID: String, id: String, command: RemoteAgentLocalCommand, isShowing: Bool) {
+        self.tabID = tabID
+        self.id = id
+        self.command = command
+        self.isShowing = isShowing
+    }
+}
+
+/// A device asking for the dialog on a tab's screen to be closed.
+///
+/// No keystroke travels. The host sends the same Escape a permission deny sends, which is what
+/// every one of these dialogs offers in its footer and which means the same wherever the cursor
+/// sits; then it reads the screen again and reports whether the dialog went.
+public struct RemoteDismissAgentScreen: Codable, Equatable, Sendable {
+    public var tabID: String
+
+    public init(tabID: String) {
+        self.tabID = tabID
     }
 }

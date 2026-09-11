@@ -53,6 +53,10 @@ public enum RemoteControlMessage: Codable, Equatable, Sendable {
     case agentPrompt(RemoteAgentPrompt)
     /// Device to host, answering that prompt.
     case agentAnswer(RemoteAgentAnswer)
+    /// Host to device, what a screen-only command drew, and later whether it is still there.
+    case agentScreen(RemoteAgentScreen)
+    /// Device to host, asking for that dialog to be closed.
+    case dismissAgentScreen(RemoteDismissAgentScreen)
 
     // Device to host. Each names the one thing it does, so the host can decide per intent what a
     // device may ask for. A single "apply this change" message would make that decision impossible
@@ -72,7 +76,7 @@ public enum RemoteControlMessage: Codable, Equatable, Sendable {
         case hello, welcome, tree, attach, attached, detach, resync, agentActivity, error
         case renameTab, closeTab, renameWorkspace, createWorkspace, deleteWorkspace, createTerminalTab
         case attachAgent, agentConversation, agentEntries, detachAgent
-        case agentReply, agentPrompt, agentAnswer
+        case agentReply, agentPrompt, agentAnswer, agentScreen, dismissAgentScreen
         case notifications
     }
 
@@ -80,7 +84,7 @@ public enum RemoteControlMessage: Codable, Equatable, Sendable {
         case hello, welcome, tree, attach, attached, detach, resync, agentActivity, error
         case renameTab, closeTab, renameWorkspace, createWorkspace, deleteWorkspace, createTerminalTab
         case attachAgent, agentConversation, agentEntries, detachAgent
-        case agentReply, agentPrompt, agentAnswer
+        case agentReply, agentPrompt, agentAnswer, agentScreen, dismissAgentScreen
         case notifications
     }
 
@@ -120,6 +124,10 @@ public enum RemoteControlMessage: Codable, Equatable, Sendable {
             self = .agentPrompt(try container.decode(RemoteAgentPrompt.self, forKey: .agentPrompt))
         case .agentAnswer:
             self = .agentAnswer(try container.decode(RemoteAgentAnswer.self, forKey: .agentAnswer))
+        case .agentScreen:
+            self = .agentScreen(try container.decode(RemoteAgentScreen.self, forKey: .agentScreen))
+        case .dismissAgentScreen:
+            self = .dismissAgentScreen(try container.decode(RemoteDismissAgentScreen.self, forKey: .dismissAgentScreen))
         case .notifications:
             self = .notifications(try container.decode(RemoteNotifications.self, forKey: .notifications))
         case .error: self = .error(try container.decode(RemoteError.self, forKey: .error))
@@ -192,6 +200,12 @@ public enum RemoteControlMessage: Codable, Equatable, Sendable {
         case .agentAnswer(let value):
             try container.encode(Kind.agentAnswer, forKey: .type)
             try container.encode(value, forKey: .agentAnswer)
+        case .agentScreen(let value):
+            try container.encode(Kind.agentScreen, forKey: .type)
+            try container.encode(value, forKey: .agentScreen)
+        case .dismissAgentScreen(let value):
+            try container.encode(Kind.dismissAgentScreen, forKey: .type)
+            try container.encode(value, forKey: .dismissAgentScreen)
         case .notifications(let value):
             try container.encode(Kind.notifications, forKey: .type)
             try container.encode(value, forKey: .notifications)

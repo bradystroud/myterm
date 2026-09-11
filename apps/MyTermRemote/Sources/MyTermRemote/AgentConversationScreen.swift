@@ -20,7 +20,8 @@ struct AgentConversationScreen: View {
     @State private var isShowingCommands = false
     /// A typed command that would open something on the Mac, held until the person confirms.
     @State private var macOnlyCommand: AgentCommandCatalog.Command?
-    /// The last command whose answer went to the Mac's screen, for the bar that says so.
+    /// The last command whose answer went to the Mac's screen, for the bar that says so while
+    /// the Mac reads it back, and for as long as it stays when the Mac could not.
     @State private var screenCommand: AgentCommandCatalog.Command?
     @State private var screenCommandTimer: Task<Void, Never>?
 
@@ -58,6 +59,13 @@ struct AgentConversationScreen: View {
         }
         .onAppear { store.followConversation(tabID: tab.id) }
         .onDisappear { store.stopFollowingConversation(tabID: tab.id) }
+        .onChange(of: store.screen) { _, screen in
+            // The Mac read the dialog: its rows are in the conversation and the bar below offers
+            // to dismiss it, so the notice that could only name the Mac has nothing left to say.
+            guard screen != nil else { return }
+            screenCommandTimer?.cancel()
+            screenCommand = nil
+        }
         .sheet(isPresented: $isShowingCommands) {
             AgentCommandSheet(run: { command, argument in send(command.line(with: argument)) },
                               currentModel: followedConversation?.currentModel)
@@ -197,7 +205,14 @@ struct AgentConversationScreen: View {
                     openTerminal: { isShowingTerminal = true }
                 )
             }
-            if let screenCommand {
+            if let screen = store.screen {
+                AgentScreenDismissBar(
+                    command: screen.command.name,
+                    isEnabled: store.client.allowsMutation && !store.isDismissingScreen,
+                    dismiss: { store.dismissScreen(tabID: tab.id) },
+                    openTerminal: { isShowingTerminal = true }
+                )
+            } else if let screenCommand {
                 AgentScreenNoticeBar(
                     command: screenCommand,
                     openTerminal: { self.screenCommand = nil; isShowingTerminal = true },
@@ -464,13 +479,26 @@ private struct AgentLocalCommandView: View {
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
+        // A screen scrolls sideways, and text that scrolls is left out of the combined label.
+        .accessibilityValue(command.isScreen ? command.output : "")
         .accessibilityIdentifier("agent.localCommand")
     }
 
-    /// A line is centred under the command. A report, such as `/context`'s, reads as a block.
+    /// A line is centred under the command. A report, such as `/context`'s, reads as a block. A
+    /// screen keeps its columns, which only a fixed-width face and no wrapping can do.
     @ViewBuilder
     private var output: some View {
-        if command.output.contains("\n") {
+        if command.isScreen {
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(command.output)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .textSelection(.enabled)
+                    .padding(10)
+            }
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        } else if command.output.contains("\n") {
             AgentMarkdownView(text: command.output)
                 .font(.caption)
                 .foregroundStyle(.secondary)

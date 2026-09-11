@@ -176,9 +176,38 @@ gated as the composer is.
 | `/context` | Context | none | The usage grid in the transcript, then the same figures as markdown, which is what the phone shows. |
 | `/model <alias>` | Model | the model menu | "Set model to …" in the transcript; the bar's label follows the next answer. |
 | `/effort <level>` | Model | low, medium, high, xhigh, max | "Set effort level to …" in the transcript. |
-| `/usage` | Info | none | Nothing in the transcript: a dialog on the Mac's screen. The phone says "shown on your Mac" and offers the terminal. |
+| `/usage` | Info | none | Nothing in the transcript: a dialog on the Mac's screen. The host reads it off the grid and the phone shows it as the command's output, with a Dismiss button. See below. |
 | `/status` | Info | none | As `/usage`. |
 | `/help` | Info | none | As `/usage`. |
+
+**Commands whose answer is on the screen.** `/usage`, `/status` and `/help` draw a dialog and
+write nothing, so the transcript can never show their answer. The host reads it the way it reads a
+permission prompt, from the tab's grid (`AgentScreenCapture`):
+
+1. The phone types the command as any reply. The catalog, not the connection, decides which
+   lines get this treatment (`AgentCommandCatalog.screenCommand(typed:)`): the three runnable
+   info commands, and not a bare picker, which draws a menu to operate rather than an answer.
+2. After the Return the host waits for the screen to settle: 500 ms for the dialog to draw
+   (measured at 300–500 ms against the CLI), then a look every 100 ms until two in a row agree
+   and differ from the screen the Return went into, capped at 2 s. A screen that keeps changing
+   has a spinner on it, not a dialog, and one that never moves on has drawn nothing yet.
+3. The rows go to the phone in `agentScreen`, as a `localCommand` marked `isScreen`, with blank
+   rows trimmed from either end and collapsed within, the shared margin removed, and the text
+   capped like any block. The phone adds the row itself ("Ran /usage" over the rows in a
+   fixed-width face) and swaps the "shown on your Mac" bar for one that offers **Dismiss**, with
+   the terminal as the secondary action. An empty capture leaves the old bar in place.
+4. Dismiss sends `dismissAgentScreen`, gated by the Mac's input switch like every keystroke. The
+   host sends the Escape a permission deny sends, waits for the screen to settle again, and
+   reports whether the dialog is still there, judged by how many of its rows remain so a figure
+   that ticks does not read as the dialog having gone. The bar stays while it is.
+
+What the three look like, captured from the CLI at 100 by 30, is in
+`Tests/MyTermRemoteHostTests/AgentScreenFixtures.swift`. Each closed on a single Escape.
+`/usage` is taller than a 30-row terminal: the CLI scrolls it, the banner is cut off the top, and a
+"↓" in the corner says there is more, which the phone shows as it is. The terminal view has the
+rest. The `/status` dialog names the session and the working directory; a device that has asked
+for the tab and typed the command could already read both through the terminal view, so nothing
+new crosses the wire that the tree keeps back.
 
 **Interactive on the Mac only.** Not offered. Typed by hand, the phone warns that the command
 opens on the Mac and offers the terminal view, or sends it anyway. `/model` and `/effort` with no

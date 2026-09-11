@@ -93,6 +93,18 @@ final class AgentCommandCatalogTests: XCTestCase {
         XCTAssertEqual(AgentCommandCatalog.typed("/pr-feedback-actioner on #42"), .unknown(name: "/pr-feedback-actioner"))
     }
 
+    /// The host reads the screen after exactly the lines whose answer will be there and nowhere
+    /// else. A picker typed bare opens on the Mac too, but is a menu to operate, not an answer.
+    func testTheLinesWhoseAnswerIsOnTheScreenAreTheThreeInfoCommands() {
+        for name in ["/usage", "/status", "/help"] {
+            XCTAssertEqual(AgentCommandCatalog.screenCommand(typed: name)?.name, name)
+            XCTAssertEqual(AgentCommandCatalog.screenCommand(typed: "  \(name) "), AgentCommandCatalog.command(named: name))
+        }
+        for line in ["/model", "/resume", "/cost", "/context", "/model opus", "/rename usage", "usage", "/helpful"] {
+            XCTAssertNil(AgentCommandCatalog.screenCommand(typed: line), line)
+        }
+    }
+
     // MARK: - Notes on what ran
 
     func testClearingReadsAsANewSession() {
