@@ -177,6 +177,26 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertEqual(received.entries.map(\.activity), [.awaitingInput, .finished])
     }
 
+    /// A Mac from before the history kept only the unread backlog and never said so. Its entries
+    /// still decode, and they decode as unread, which is what they were.
+    func testANotificationWithoutAReadMarkDecodesAsUnread() throws {
+        let json = """
+        {"tabID":"tab-1","workspaceID":"ws-1","workspaceTitle":"api","tabTitle":"build","activity":"finished","date":900}
+        """
+        let decoded = try JSONDecoder().decode(RemoteNotification.self, from: Data(json.utf8))
+        XCTAssertFalse(decoded.isRead)
+        XCTAssertEqual(decoded.date, Date(timeIntervalSinceReferenceDate: 900))
+    }
+
+    func testTheReadMarkCrossesTheWire() throws {
+        let sent = sampleNotifications()
+        let decoded = try RemoteControlCodec.decode(RemoteControlCodec.encode(.notifications(sent)))
+        guard case .notifications(let received) = decoded else {
+            return XCTFail("the message changed kind on the way through")
+        }
+        XCTAssertEqual(received.entries.map(\.isRead), [false, true])
+    }
+
     private func sampleNotifications() -> RemoteNotifications {
         RemoteNotifications(entries: [
             RemoteNotification(
@@ -193,7 +213,8 @@ final class RemoteProtocolTests: XCTestCase {
                 workspaceTitle: "api",
                 tabTitle: "build",
                 activity: .finished,
-                date: Date(timeIntervalSinceReferenceDate: 900)
+                date: Date(timeIntervalSinceReferenceDate: 900),
+                isRead: true
             ),
         ])
     }

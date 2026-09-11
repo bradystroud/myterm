@@ -9,7 +9,8 @@ final class RemoteNotificationLogTests: XCTestCase {
         tab: String,
         at seconds: TimeInterval,
         activity: AgentActivity = .finished,
-        tabTitle: String = "build"
+        tabTitle: String = "build",
+        isRead: Bool = false
     ) -> RemoteNotification {
         RemoteNotification(
             tabID: tab,
@@ -17,7 +18,8 @@ final class RemoteNotificationLogTests: XCTestCase {
             workspaceTitle: "api",
             tabTitle: tabTitle,
             activity: activity,
-            date: Date(timeIntervalSinceReferenceDate: seconds)
+            date: Date(timeIntervalSinceReferenceDate: seconds),
+            isRead: isRead
         )
     }
 
@@ -87,6 +89,40 @@ final class RemoteNotificationLogTests: XCTestCase {
         XCTAssertEqual(log.entries.map { $0.id }, [id("tab-1", at: 300), id("tab-1", at: 100)])
         XCTAssertEqual(log.entries.map(\.isRead), [false, true])
         XCTAssertEqual(log.unreadCount, 1)
+    }
+
+    func testAnEntryTheUserReachedOnTheMacBeforeTheDeviceConnectedArrivesAsHistory() {
+        var log = RemoteNotificationLog()
+
+        log.merge(RemoteNotifications(entries: [
+            notification(tab: "tab-2", at: 200),
+            notification(tab: "tab-1", at: 100, isRead: true),
+        ]))
+
+        XCTAssertEqual(log.entries.map(\.tabID), ["tab-2", "tab-1"])
+        XCTAssertEqual(log.entries.map(\.isRead), [false, true])
+        XCTAssertEqual(log.unreadCount, 1)
+    }
+
+    func testReachingTheTabOnTheMacReadsTheEntryHere() {
+        var log = RemoteNotificationLog()
+        log.merge(RemoteNotifications(entries: [notification(tab: "tab-1", at: 100)]))
+        XCTAssertEqual(log.unreadCount, 1)
+
+        log.merge(RemoteNotifications(entries: [notification(tab: "tab-1", at: 100, isRead: true)]))
+
+        XCTAssertEqual(log.entries.map(\.isRead), [true])
+        XCTAssertEqual(log.unreadCount, 0)
+    }
+
+    func testReadingHereIsNotUndoneByAMacThatStillListsTheEntryUnread() {
+        var log = RemoteNotificationLog()
+        log.merge(RemoteNotifications(entries: [notification(tab: "tab-1", at: 100)]))
+        log.markRead(id("tab-1", at: 100))
+
+        log.merge(RemoteNotifications(entries: [notification(tab: "tab-1", at: 100)]))
+
+        XCTAssertEqual(log.entries.map(\.isRead), [true], "the Mac is not told about reads here, so it cannot overrule them")
     }
 
     func testAResendTakesTheMacsCurrentNamesForAnEntryItStillLists() {
