@@ -39,6 +39,53 @@ private final class DemoDataSource: RemoteHostDataSource {
         }
     }
 
+    /// The backlog a device sees on connect: the two demo tabs whose cook asks for the user.
+    ///
+    /// Newest first, as the Mac's bell lists it. `fileNotification` and `readAll` are what the UI
+    /// tests drive through the control file, standing in for an agent finishing and for the user
+    /// reaching the tab on the Mac.
+    private(set) var notifications = RemoteNotifications(entries: [
+        RemoteNotification(
+            tabID: "tab-1",
+            workspaceID: "workspace-1",
+            workspaceTitle: "myterm",
+            tabTitle: "agent",
+            activity: .awaitingInput,
+            date: Date().addingTimeInterval(-60)
+        ),
+        RemoteNotification(
+            tabID: "tab-2",
+            workspaceID: "workspace-1",
+            workspaceTitle: "myterm",
+            tabTitle: "deploy",
+            activity: .finished,
+            date: Date().addingTimeInterval(-600)
+        ),
+    ])
+
+    func remoteNotifications() -> RemoteNotifications? { notifications }
+
+    /// The build tab's agent finished a turn just now. One entry per tab, like the Mac.
+    func fileNotification() {
+        notifications.entries.removeAll { $0.tabID == "tab-0" }
+        notifications.entries.insert(
+            RemoteNotification(
+                tabID: "tab-0",
+                workspaceID: "workspace-1",
+                workspaceTitle: "myterm",
+                tabTitle: "build",
+                activity: .finished,
+                date: Date()
+            ),
+            at: 0
+        )
+    }
+
+    /// The user reached every waiting tab on the Mac.
+    func readAll() {
+        notifications.entries.removeAll()
+    }
+
     /// Gives the demo one tab per cook colour, so the device's rendering can be checked by eye.
     private static func demoActivity(forTab id: String) -> AgentActivity? {
         switch id {
@@ -239,16 +286,16 @@ final class RemoteHostDemo: XCTestCase {
                 continue
             }
             try? FileManager.default.removeItem(atPath: controlPath)
-            try await obey(command.trimmingCharacters(in: .whitespacesAndNewlines), service: service)
+            try await obey(command.trimmingCharacters(in: .whitespacesAndNewlines), service: service, source: source)
         }
         service.stop()
     }
 
     /// The UI tests share this machine's filesystem with the host, and a file is the one channel
-    /// they have to it. Each line is something a Mac can do to a device: go away for a moment, or
-    /// change what it permits.
+    /// they have to it. Each line is something a Mac can do to a device: go away for a moment,
+    /// change what it permits, or say what its agents did.
     @MainActor
-    private func obey(_ command: String, service: RemoteHostService) async throws {
+    private func obey(_ command: String, service: RemoteHostService, source: DemoDataSource) async throws {
         switch command {
         case "drop":
             // The Mac goes to sleep for a few seconds, then comes back on the same port.
@@ -259,6 +306,12 @@ final class RemoteHostDemo: XCTestCase {
             service.allowsInput = false
         case "writable":
             service.allowsInput = true
+        case "notify":
+            source.fileNotification()
+            service.broadcast(notifications: source.notifications)
+        case "read":
+            source.readAll()
+            service.broadcast(notifications: source.notifications)
         default:
             print("DEMO_UNKNOWN_COMMAND \(command)")
         }

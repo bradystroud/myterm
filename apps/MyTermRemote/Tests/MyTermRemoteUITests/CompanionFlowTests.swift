@@ -143,6 +143,68 @@ final class CompanionFlowTests: XCTestCase {
         snap(app, "30-disconnected")
     }
 
+    // MARK: - Latest
+
+    @MainActor
+    func testTheLatestTabListsWhatAgentsDidAndReadsAsYouOpenThem() throws {
+        let app = launch(connecting: true)
+        expectConnected(app)
+
+        // The demo host files two entries on connect, and the badge counts them before the tab
+        // is even opened.
+        let latestTab = app.tabBars.buttons["Latest"]
+        XCTAssertTrue(latestTab.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForBadge("2", on: latestTab), "two unread entries should badge the tab")
+        latestTab.tap()
+        XCTAssertTrue(app.navigationBars["Latest"].waitForExistence(timeout: 5))
+        let rows = app.buttons.matching(identifier: "latest.row")
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(app.staticTexts["Agent is waiting for you"].exists, "a question says so")
+        XCTAssertTrue(app.staticTexts["Agent finished"].exists, "a finished turn says so")
+        snap(app, "70-latest")
+
+        // Opening the newest row lands on its tab, and reads it.
+        rows.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["agent"].waitForExistence(timeout: 5), "the row opens the tab it names")
+        snap(app, "71-latest-opened")
+        app.navigationBars["agent"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["Latest"].waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForBadge("1", on: latestTab), "an opened entry is read")
+        XCTAssertEqual(rows.count, 2, "a read entry stays in the list")
+
+        // An agent finishes on the Mac. The device hears about it without being asked.
+        try tellHost("notify")
+        XCTAssertTrue(waitForBadge("2", on: latestTab), "a new entry is unread")
+        XCTAssertTrue(rows.element(boundBy: 2).waitForExistence(timeout: 10))
+        snap(app, "72-latest-new-entry")
+
+        app.buttons["latest.markAllRead"].tap()
+        XCTAssertTrue(waitForBadge(nil, on: latestTab), "marking all as read clears the badge")
+        snap(app, "73-latest-all-read")
+
+        // The user reaches every tab on the Mac. The Mac's list empties; the device's history stays.
+        try tellHost("read")
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertFalse(app.otherElements["latest.empty"].exists)
+    }
+
+    /// The tab bar reports its badge as the button's value, "2 items" for two. `nil` waits for no
+    /// badge at all.
+    @MainActor
+    private func waitForBadge(_ count: String?, on tab: XCUIElement) -> Bool {
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            let value = tab.value as? String
+            if let count {
+                if let value, value.hasPrefix(count) { return true }
+            } else if value == nil || value?.isEmpty == true {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        return false
+    }
+
     // MARK: - Away from home
 
     @MainActor

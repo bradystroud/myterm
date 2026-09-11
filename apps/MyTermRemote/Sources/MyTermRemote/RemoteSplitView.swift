@@ -91,19 +91,8 @@ struct RemoteSplitView: View {
     @ViewBuilder
     private var detailColumn: some View {
         Group {
-            if let tab = selectedTab {
-                switch tab.kind {
-                case .terminal:
-                    // An agent's own conversation reads on a phone; its terminal grid does not.
-                    // The raw terminal stays one tap away inside the conversation screen.
-                    if tab.hasAgentConversation {
-                        AgentConversationScreen(tab: tab, store: store)
-                    } else {
-                        TerminalScreen(tab: tab, store: store)
-                    }
-                case .browser:
-                    BrowserTabScreen(tab: tab)
-                }
+            if let selectedTabID {
+                RemoteTabDestination(tabID: selectedTabID, store: store)
             } else {
                 placeholder
             }
@@ -117,11 +106,6 @@ struct RemoteSplitView: View {
             systemImage: "terminal",
             description: Text("Pick a tab to see what it is doing.")
         )
-    }
-
-    private var selectedTab: RemoteTab? {
-        guard let selectedTabID else { return nil }
-        return store.tree?.workspaces.flatMap(\.tabs).first { $0.id == selectedTabID }
     }
 
     /// Workspaces grouped under the folder they belong to, ungrouped ones first, empty folders

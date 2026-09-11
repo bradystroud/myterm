@@ -9,10 +9,6 @@ struct RemoteTreeView: View {
 
     @State private var command: RemoteTreeCommand?
 
-    private func tab(withID tabID: String) -> RemoteTab? {
-        store.tree?.workspaces.flatMap(\.tabs).first { $0.id == tabID }
-    }
-
     private var folderedWorkspaces: [(RemoteFolder?, [RemoteWorkspace])] {
         guard let tree = store.tree else { return [] }
         let folders: [RemoteFolder?] = [nil] + tree.folders
@@ -43,29 +39,7 @@ struct RemoteTreeView: View {
             }
         }
         .navigationDestination(for: String.self) { tabID in
-            if let tab = tab(withID: tabID) {
-                switch tab.kind {
-                case .terminal:
-                    // An agent's own conversation reads on a phone; its terminal grid does not.
-                    // The raw terminal stays one tap away inside the conversation screen.
-                    if tab.hasAgentConversation {
-                        AgentConversationScreen(tab: tab, store: store)
-                    } else {
-                        TerminalScreen(tab: tab, store: store)
-                    }
-                case .browser:
-                    BrowserTabScreen(tab: tab)
-                }
-            } else {
-                // The tab left the tree while it was open, which is what closing it from here does.
-                // Saying so beats a blank screen; this view cannot pop itself, because the phone's
-                // navigation path belongs to the view that presents it.
-                ContentUnavailableView(
-                    "Tab Closed",
-                    systemImage: "terminal",
-                    description: Text("This tab is no longer open on your Mac.")
-                )
-            }
+            RemoteTabDestination(tabID: tabID, store: store)
         }
         .navigationTitle("Workspaces")
         .toolbar {

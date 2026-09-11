@@ -10,6 +10,9 @@ import Observation
 final class RemoteSessionStore {
     let client: RemoteClient
     private(set) var tree: RemoteTree?
+    /// What agents did while the person was away, and what they have read of it. Not cleared with
+    /// the tree: it is the device's own record, and leaving a Mac does not unmake what happened.
+    let notifications = RemoteNotificationLogStore()
     /// The last request the Mac refused, for a passing banner. Cleared on its own.
     private(set) var refusal: RemoteError?
     /// Why the tab on screen could not be attached, when the Mac said so.
@@ -145,6 +148,10 @@ extension RemoteSessionStore: RemoteClientDelegate {
 
     func remoteClient(_ client: RemoteClient, didReceive activity: RemoteAgentActivity) {
         tree = tree?.applyingAttention(from: activity)
+    }
+
+    func remoteClient(_ client: RemoteClient, didReceive notifications: RemoteNotifications) {
+        self.notifications.merge(notifications)
     }
 
     func remoteClient(_ client: RemoteClient, didReceive conversation: RemoteAgentConversation) {

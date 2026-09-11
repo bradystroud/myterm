@@ -28,7 +28,9 @@ The Mac stays the only place a process runs. The device is a window onto it.
 - It is not a sync service. There is no account, no cloud copy of the workspace tree, and no server
   that can read terminal content.
 - It is not a copy of the Mac layout. Splits, dividers, and pane groups stay on the Mac.
-- It is not an agent dashboard. The device shows the same attention dot the Mac shows, and nothing more.
+- It is not an agent dashboard. The device shows the same attention dot the Mac shows, and the same
+  backlog the Mac's bell lists, as a Latest tab it can read through. It does not grade, chart, or
+  summarise what agents are doing.
 - It is not a remote browser. Browser tabs appear in the list, but MyTerm does not mirror a WKWebView.
 - It is not a second way to configure MyTerm. Settings stay on the Mac.
 
@@ -518,6 +520,25 @@ must state rather than discover.
 - **Closed, or backgrounded longer.** Only Apple Push Notification service wakes an app, and APNs needs a
   provider that holds a signing key.
 
+### The Latest tab
+
+The bell on the Mac lists the agents that finished, or asked a question, in a tab the user was not
+looking at. The device shows that list as its second tab, **Latest**, with the unread count as a badge.
+The host sends the Mac's backlog whole in a `notifications` message, on connect and again whenever it
+changes, the same way it sends the tree. Each entry carries the workspace and tab titles, because a
+device keeps entries after the Mac has dropped them, and by then the tab may be gone from the tree.
+
+The device keeps its own log, newest first, capped at 200 entries, and it persists between launches.
+Each host snapshot is merged into it: an entry the device has not seen is new and unread, an entry the
+Mac still lists keeps its read mark and takes the Mac's current names, and an entry the Mac has dropped
+stays in the list as read history. An entry is a tab and a moment, so a tab that needs the user again is
+a new unread row rather than a resurrected old one. Opening a row lands on the same screen the workspace
+list opens for that tab, and reads it. Rows can be swiped read or unread, and the toolbar marks all as
+read.
+
+Reading on the device changes nothing on the Mac. Whether a tab read on the phone should lose its dot on
+the Mac is not yet decided, so for now the Mac is the only place that reads its own backlog.
+
 Push is not in this plan. It becomes cheap later rather than expensive, because the relay already holds
 a connection to the host and a relationship with the device. Adding a contentless push is then a feature
 of an existing service, not a new service. Should it ship, the payload carries no terminal content, no
@@ -538,9 +559,11 @@ Both devices use the same shape, because the layout is already flat:
 
 1. Folders and workspaces, with attention dots.
 2. A workspace: a tab strip along the top, one open tab filling the rest.
+3. Latest: what agents did while the user was away, read through like an inbox.
 
-On iPad this is a two-column split view, and it supports Stage Manager and an external keyboard. On
-iPhone it is a navigation stack. There is no pane interface on either, and that is the point.
+Workspaces and Latest are the two tabs of a bottom tab bar. On iPad the workspace tab is a two-column
+split view, and it supports Stage Manager and an external keyboard. On iPhone it is a navigation stack.
+There is no pane interface on either, and that is the point.
 
 ### The terminal surface
 

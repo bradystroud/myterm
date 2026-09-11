@@ -29,6 +29,9 @@ struct ConnectionView: View {
     @State private var path = NavigationPath()
     /// The split layout's selection. Held here so a deep link can drive either layout.
     @State private var selectedTabID: String?
+    @State private var section = RemoteSection.workspaces
+    /// The Latest tab's own stack, so a row opens over the list it came from.
+    @State private var latestPath = NavigationPath()
     @State private var isAddingMac = false
     /// Which field the keyboard belongs to, so it can be sent away again. The port uses a
     /// number pad, and a number pad has no return key to dismiss itself with.
@@ -54,39 +57,24 @@ struct ConnectionView: View {
 
     var body: some View {
         Group {
-            if showsWorkspaces, horizontalSizeClass == .regular {
-                RemoteSplitView(store: store, selectedTabID: $selectedTabID)
-            } else {
-                NavigationStack(path: $path) {
-                    Group {
-                        if showsWorkspaces {
-                            RemoteTreeView(store: store)
-                        } else {
-                            savedConnectionsList
-                        }
+            if showsWorkspaces {
+                TabView(selection: $section) {
+                    workspaces
+                        .safeAreaInset(edge: .bottom, spacing: 0) { connectionStatus }
+                        .tabItem { Label("Workspaces", systemImage: "square.grid.2x2") }
+                        .tag(RemoteSection.workspaces)
+                    NavigationStack(path: $latestPath) {
+                        LatestView(store: store, path: $latestPath)
                     }
+                    .safeAreaInset(edge: .bottom, spacing: 0) { connectionStatus }
+                    .tabItem { Label("Latest", systemImage: "tray") }
+                    .badge(store.notifications.log.unreadCount)
+                    .tag(RemoteSection.latest)
                 }
-            }
-        }
-        // At the bottom, where it takes room from the content rather than fighting the navigation
-        // bar for the top, and where the keyboard pushes it up along with everything else.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if showsWorkspaces, !isConnected {
-                ConnectionLostBanner(
-                    hostName: currentHostName,
-                    isRetrying: isConnecting || reconnect.hasAttemptsLeft,
-                    onRetry: { retryNow() },
-                    onLeave: { leave() }
-                )
-            } else if isConnected, store.client.path == .relay {
-                // Said once, quietly, so a slow relay is not mistaken for a slow Mac.
-                Label("Through the relay", systemImage: "antenna.radiowaves.left.and.right")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 5)
-                    .background(.bar)
-                    .accessibilityIdentifier("connection.viaRelay")
+            } else {
+                NavigationStack {
+                    savedConnectionsList
+                }
             }
         }
         .overlay(alignment: .bottom) {
@@ -109,12 +97,62 @@ struct ConnectionView: View {
             // Opening straight to a tab is what a notification about an agent should do, and it is
             // how the connection can be driven without touching the screen.
             guard tree != nil, !openTab.isEmpty else { return }
+            section = .workspaces
             if horizontalSizeClass == .regular {
                 selectedTabID = openTab
             } else {
                 path.append(openTab)
             }
             openTab = ""
+        }
+        // A device holds one terminal attachment, so only one tab may have a screen open at a
+        // time. Opening from Latest closes whatever Workspaces had open, the way opening a
+        // notification on the Mac moves its selection, and going back to Workspaces closes what
+        // Latest opened.
+        .onChange(of: latestPath.count) { _, count in
+            guard count > 0 else { return }
+            path = NavigationPath()
+            selectedTabID = nil
+        }
+        .onChange(of: section) { _, section in
+            if section == .workspaces {
+                latestPath = NavigationPath()
+            }
+        }
+    }
+
+    /// The workspace list and what it opens. Two columns where there is room, a stack where not.
+    @ViewBuilder
+    private var workspaces: some View {
+        if horizontalSizeClass == .regular {
+            RemoteSplitView(store: store, selectedTabID: $selectedTabID)
+        } else {
+            NavigationStack(path: $path) {
+                RemoteTreeView(store: store)
+            }
+        }
+    }
+
+    // At the bottom, where it takes room from the content rather than fighting the navigation
+    // bar for the top, and where the keyboard pushes it up along with everything else.
+    @ViewBuilder
+    private var connectionStatus: some View {
+        if !isConnected {
+            ConnectionLostBanner(
+                hostName: currentHostName,
+                isRetrying: isConnecting || reconnect.hasAttemptsLeft,
+                onRetry: { retryNow() },
+                onLeave: { leave() }
+            )
+        } else if store.client.path == .relay {
+            // Said once, quietly, so a slow relay is not mistaken for a slow Mac.
+            Label("Through the relay", systemImage: "antenna.radiowaves.left.and.right")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+                .background(.bar)
+                .accessibilityIdentifier("connection.viaRelay")
         }
     }
 
@@ -482,7 +520,9 @@ struct ConnectionView: View {
         wasConnected = false
         pendingConnectionID = nil
         path = NavigationPath()
+        latestPath = NavigationPath()
         selectedTabID = nil
+        section = .workspaces
         store.clearTree()
     }
 
@@ -539,6 +579,12 @@ struct ReconnectSchedule {
 }
 
 /// Sits above whatever the user was looking at when the Mac went away.
+/// The two things a connected device shows: the Mac's workspaces, and what its agents did.
+private enum RemoteSection: Hashable {
+    case workspaces
+    case latest
+}
+
 private struct ConnectionLostBanner: View {
     let hostName: String?
     let isRetrying: Bool
