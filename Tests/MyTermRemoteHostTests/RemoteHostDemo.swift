@@ -298,7 +298,12 @@ final class RemoteHostDemo: XCTestCase {
     private func obey(_ command: String, service: RemoteHostService, source: DemoDataSource) async throws {
         switch command {
         case "drop":
-            // The Mac goes to sleep for a few seconds, then comes back on the same port.
+            // The Mac goes to sleep for a few seconds, then comes back on the same port. The port
+            // it won is asked for by name: when MyTerm itself holds the default one, the host is
+            // on a fallback, and coming back on a different fallback would lose the device for good.
+            if let port = service.listeningPort {
+                service.preferredPort = port
+            }
             service.stop()
             try await Task.sleep(nanoseconds: 3_000_000_000)
             service.start()

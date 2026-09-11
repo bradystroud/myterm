@@ -150,15 +150,23 @@ final class CompanionFlowTests: XCTestCase {
         let app = launch(connecting: true)
         expectConnected(app)
 
+        // A phone puts the tab bar at the bottom; an iPad puts it in the top bar, outside any
+        // `tabBars` element. The button is the same either way.
+        let latestTab = app.tabBars.buttons["Latest"].waitForExistence(timeout: 5)
+            ? app.tabBars.buttons["Latest"]
+            : app.buttons["Latest"].firstMatch
+        XCTAssertTrue(latestTab.waitForExistence(timeout: 5), "the Latest tab should be offered")
+        snap(app, "69-workspaces-with-latest-tab")
         // The demo host files two entries on connect, and the badge counts them before the tab
-        // is even opened.
-        let latestTab = app.tabBars.buttons["Latest"]
-        XCTAssertTrue(latestTab.waitForExistence(timeout: 5))
-        XCTAssertTrue(waitForBadge("2", on: latestTab), "two unread entries should badge the tab")
+        // is even opened. Only a phone's tab bar says so to accessibility; see `waitForUnread`.
+        if !isPad {
+            XCTAssertTrue(waitForUnread(2, badge: latestTab, in: app), "two unread entries should badge the tab")
+        }
         latestTab.tap()
         XCTAssertTrue(app.navigationBars["Latest"].waitForExistence(timeout: 5))
         let rows = app.buttons.matching(identifier: "latest.row")
         XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(waitForUnread(2, badge: latestTab, in: app), "both rows start unread")
         XCTAssertTrue(app.staticTexts["Agent is waiting for you"].exists, "a question says so")
         XCTAssertTrue(app.staticTexts["Agent finished"].exists, "a finished turn says so")
         snap(app, "70-latest")
@@ -169,17 +177,17 @@ final class CompanionFlowTests: XCTestCase {
         snap(app, "71-latest-opened")
         app.navigationBars["agent"].buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.navigationBars["Latest"].waitForExistence(timeout: 5))
-        XCTAssertTrue(waitForBadge("1", on: latestTab), "an opened entry is read")
+        XCTAssertTrue(waitForUnread(1, badge: latestTab, in: app), "an opened entry is read")
         XCTAssertEqual(rows.count, 2, "a read entry stays in the list")
 
         // An agent finishes on the Mac. The device hears about it without being asked.
         try tellHost("notify")
-        XCTAssertTrue(waitForBadge("2", on: latestTab), "a new entry is unread")
         XCTAssertTrue(rows.element(boundBy: 2).waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForUnread(2, badge: latestTab, in: app), "a new entry is unread")
         snap(app, "72-latest-new-entry")
 
         app.buttons["latest.markAllRead"].tap()
-        XCTAssertTrue(waitForBadge(nil, on: latestTab), "marking all as read clears the badge")
+        XCTAssertTrue(waitForUnread(0, badge: latestTab, in: app), "marking all as read clears the badge")
         snap(app, "73-latest-all-read")
 
         // The user reaches every tab on the Mac. The Mac's list empties; the device's history stays.
@@ -188,18 +196,20 @@ final class CompanionFlowTests: XCTestCase {
         XCTAssertFalse(app.otherElements["latest.empty"].exists)
     }
 
-    /// The tab bar reports its badge as the button's value, "2 items" for two. `nil` waits for no
-    /// badge at all.
+    /// Unread is shown twice: as the badge on the tab, and as the dot on each row. A phone's tab
+    /// bar reports its badge as the button's value, "2 items" for two; an iPad's top tab bar draws
+    /// the badge and says nothing about it, so there only the rows, which carry Read or Unread as
+    /// their value, can be checked. Both are checked wherever they can be.
     @MainActor
-    private func waitForBadge(_ count: String?, on tab: XCUIElement) -> Bool {
+    private func waitForUnread(_ count: Int, badge tab: XCUIElement, in app: XCUIApplication) -> Bool {
+        let rows = app.buttons.matching(identifier: "latest.row")
         let deadline = Date().addingTimeInterval(10)
         while Date() < deadline {
-            let value = tab.value as? String
-            if let count {
-                if let value, value.hasPrefix(count) { return true }
-            } else if value == nil || value?.isEmpty == true {
-                return true
-            }
+            let badge = (tab.value as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let badgeAgrees = isPad || (count == 0 ? badge == nil : badge?.hasPrefix("\(count)") == true)
+            let unreadRows = rows.allElementsBoundByIndex.filter { ($0.value as? String) == "Unread" }.count
+            let rowsAgree = rows.count == 0 || unreadRows == count
+            if badgeAgrees, rowsAgree { return true }
             Thread.sleep(forTimeInterval: 0.25)
         }
         return false
