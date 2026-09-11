@@ -44,18 +44,21 @@ struct RemoteTreeView: View {
         }
         .navigationDestination(for: String.self) { tabID in
             if let tab = tab(withID: tabID) {
-                switch tab.kind {
-                case .terminal:
-                    // An agent's own conversation reads on a phone; its terminal grid does not.
-                    // The raw terminal stays one tap away inside the conversation screen.
-                    if tab.hasAgentConversation {
-                        AgentConversationScreen(tab: tab, store: store)
-                    } else {
-                        TerminalScreen(tab: tab, store: store)
+                Group {
+                    switch tab.kind {
+                    case .terminal:
+                        // An agent's own conversation reads on a phone; its terminal grid does not.
+                        // The raw terminal stays one tap away inside the conversation screen.
+                        if tab.hasAgentConversation {
+                            AgentConversationScreen(tab: tab, store: store)
+                        } else {
+                            TerminalScreen(tab: tab, store: store)
+                        }
+                    case .browser:
+                        BrowserTabScreen(tab: tab)
                     }
-                case .browser:
-                    BrowserTabScreen(tab: tab)
                 }
+                .showsTab(tab.id, in: store)
             } else {
                 // The tab left the tree while it was open, which is what closing it from here does.
                 // Saying so beats a blank screen; this view cannot pop itself, because the phone's

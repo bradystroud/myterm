@@ -21,9 +21,11 @@ struct ConnectionView: View {
     /// Reconnects to the last Mac without asking again. Off until the user turns it on, because a
     /// terminal that opens itself is not what someone handing over an iPad expects.
     @AppStorage("remote.reconnectsOnLaunch") private var reconnectsOnLaunch = false
-    /// A tab to open as soon as the tree arrives. Cleared once used.
+    /// A tab to open as soon as the tree arrives. Cleared once used. A tapped banner writes it
+    /// too, which is how a tap lands on the tab whether the app was running or not.
     @AppStorage("remote.openTab") private var openTab = ""
-    @State private var store = RemoteSessionStore(deviceName: UIDevice.current.name)
+    @State private var store: RemoteSessionStore
+    private let notifier: AgentNotifier
     @State private var connections = SavedConnectionStore()
     @State private var nearby = MacBrowser()
     @State private var path = NavigationPath()
@@ -47,10 +49,19 @@ struct ConnectionView: View {
     @State private var lastHostName: String?
     @State private var reconnect = ReconnectSchedule()
     @State private var reconnectTask: Task<Void, Never>?
+    /// Keeps the process, and with it the socket, alive for the half minute iOS grants after the
+    /// app leaves the screen. Without it the app is suspended within seconds, and an agent that
+    /// finishes just after the phone goes down is not heard.
+    @State private var backgroundGrace = UIBackgroundTaskIdentifier.invalid
     /// Decides the layout by the room there is, not by the device. An iPad in a narrow Split View
     /// is reported compact and gets the phone's stack, which is the only thing that fits.
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
+
+    init(notifier: AgentNotifier) {
+        self.notifier = notifier
+        _store = State(initialValue: RemoteSessionStore(deviceName: UIDevice.current.name, notifier: notifier))
+    }
 
     var body: some View {
         Group {
@@ -105,17 +116,26 @@ struct ConnectionView: View {
         .onChange(of: scenePhase) { _, phase in
             handle(phase)
         }
-        .onChange(of: store.tree) { _, tree in
-            // Opening straight to a tab is what a notification about an agent should do, and it is
-            // how the connection can be driven without touching the screen.
-            guard tree != nil, !openTab.isEmpty else { return }
-            if horizontalSizeClass == .regular {
-                selectedTabID = openTab
-            } else {
-                path.append(openTab)
-            }
-            openTab = ""
+        .onChange(of: store.tree) { _, _ in
+            openTabIfAsked()
         }
+        .onChange(of: openTab) { _, _ in
+            openTabIfAsked()
+        }
+    }
+
+    /// Opens the tab a banner, or a launch argument, asked for, once there is a tree to find it in.
+    /// A tap while the app is already connected must not wait for the next tree.
+    private func openTabIfAsked() {
+        guard store.tree != nil, !openTab.isEmpty else { return }
+        if horizontalSizeClass == .regular {
+            selectedTabID = openTab
+        } else {
+            // Replaces the stack rather than pushing onto it: a tap arriving over another tab's
+            // screen would otherwise leave two tab screens stacked, both claiming the attachment.
+            path = NavigationPath([openTab])
+        }
+        openTab = ""
     }
 
     // MARK: - Saved Macs
@@ -171,6 +191,16 @@ struct ConnectionView: View {
                 Toggle("Reconnect on launch", isOn: $reconnectsOnLaunch)
             } footer: {
                 Text("A Mac shows its code under Settings, then Devices, then Link a Device. Scanning it here, or with the Camera app, adds the Mac to this list.")
+            }
+
+            Section {
+                @Bindable var notifier = notifier
+                Toggle("Notify me when an agent needs me", isOn: $notifier.isEnabled)
+                    .accessibilityIdentifier("notifications.enabled")
+            } footer: {
+                // The limit is stated here rather than discovered: a phone in a pocket is the case
+                // most people picture, and it is the one this cannot reach.
+                Text("While this app is open and connected, a banner says when an agent finishes or asks a question in a tab you are not looking at. It reaches you for about half a minute after you leave the app; after that, only opening the app again catches up.")
             }
         }
         .navigationTitle("Macs")
@@ -439,15 +469,34 @@ struct ConnectionView: View {
     private func handle(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            endBackgroundGrace()
             // Coming back is the moment to try again, whatever the schedule said. iOS closes the
             // socket of an app it suspends, so this is also the common path after any long absence.
             guard wasConnected, !isConnected else { return }
             retryNow()
         case .background:
             cancelReconnect()
+            if isConnected {
+                beginBackgroundGrace()
+            }
         default:
             break
         }
+    }
+
+    private func beginBackgroundGrace() {
+        guard backgroundGrace == .invalid else { return }
+        backgroundGrace = UIApplication.shared.beginBackgroundTask(withName: "myterm.remote.connection") {
+            // iOS is about to suspend the app whatever happens; ending the task is all that is
+            // owed. The socket dies with the suspension and reconnects on the next foreground.
+            endBackgroundGrace()
+        }
+    }
+
+    private func endBackgroundGrace() {
+        guard backgroundGrace != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundGrace)
+        backgroundGrace = .invalid
     }
 
     private func scheduleReconnect() {
@@ -656,5 +705,5 @@ private struct RefusalBanner: View {
 }
 
 #Preview {
-    ConnectionView()
+    ConnectionView(notifier: AgentNotifier())
 }

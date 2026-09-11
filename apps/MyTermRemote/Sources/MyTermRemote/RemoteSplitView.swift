@@ -92,18 +92,21 @@ struct RemoteSplitView: View {
     private var detailColumn: some View {
         Group {
             if let tab = selectedTab {
-                switch tab.kind {
-                case .terminal:
-                    // An agent's own conversation reads on a phone; its terminal grid does not.
-                    // The raw terminal stays one tap away inside the conversation screen.
-                    if tab.hasAgentConversation {
-                        AgentConversationScreen(tab: tab, store: store)
-                    } else {
-                        TerminalScreen(tab: tab, store: store)
+                Group {
+                    switch tab.kind {
+                    case .terminal:
+                        // An agent's own conversation reads on a phone; its terminal grid does not.
+                        // The raw terminal stays one tap away inside the conversation screen.
+                        if tab.hasAgentConversation {
+                            AgentConversationScreen(tab: tab, store: store)
+                        } else {
+                            TerminalScreen(tab: tab, store: store)
+                        }
+                    case .browser:
+                        BrowserTabScreen(tab: tab)
                     }
-                case .browser:
-                    BrowserTabScreen(tab: tab)
                 }
+                .showsTab(tab.id, in: store)
             } else {
                 placeholder
             }
