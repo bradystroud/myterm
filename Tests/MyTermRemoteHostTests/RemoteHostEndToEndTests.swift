@@ -74,6 +74,15 @@ private final class FakeDataSource: RemoteHostDataSource {
         receivedInput.append(contentsOf: bytes)
     }
 
+    /// Each write to the tab kept apart, because whether two writes land as one matters to an agent.
+    var tabWrites = [String]()
+
+    func sendInput(tabID: String, bytes: ArraySlice<UInt8>) -> Bool {
+        guard tabID == Self.tabID else { return false }
+        tabWrites.append(String(decoding: bytes, as: UTF8.self))
+        return true
+    }
+
     func snapshot(session: UUID) -> RemoteAttachment? {
         RemoteAttachment(session: Self.sessionID, columns: 80, rows: 24, snapshot: snapshotBytes)
     }
@@ -487,6 +496,32 @@ final class RemoteHostEndToEndTests: XCTestCase {
         await fulfillment(of: [emptied], timeout: 10)
         XCTAssertEqual(collector.notifications.last?.entries, [])
 
+        client.disconnect()
+    }
+
+    @MainActor
+    func testAReplyTypesTheWordsAndThenSubmitsThemWithAReturnOfItsOwn() async throws {
+        let token = RemoteTransportSecurity.makeToken()
+        let source = FakeDataSource()
+        let (service, port) = try await startedService(token: token, dataSource: source)
+        defer { service.stop() }
+
+        let collector = Collector()
+        let client = RemoteClient(deviceName: "TestPad")
+        client.delegate = collector
+        let treeArrived = expectation(description: "tree")
+        collector.onTree = { treeArrived.fulfill() }
+        client.connect(host: "127.0.0.1", port: port, token: token)
+        await fulfillment(of: [treeArrived], timeout: 10)
+
+        client.replyToAgent(tabID: FakeDataSource.tabID, text: "yes, go ahead")
+        for _ in 0..<100 where source.tabWrites.count < 2 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        // The Return is a write of its own. Landing with the words, it reads as a paste, and a
+        // Return inside a paste is a line break in the draft rather than the submit.
+        XCTAssertEqual(source.tabWrites, ["yes, go ahead", "\r"])
         client.disconnect()
     }
 

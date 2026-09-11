@@ -17,6 +17,13 @@ final class RemoteHostConnection {
     /// Output queued beyond this is discarded in favour of a fresh screen. A device that cannot keep
     /// up with a build wants the current screen, not every frame of one it already missed.
     static let maximumPendingBytes = 512 * 1024
+    /// How long a reply's Return waits behind its words.
+    ///
+    /// An agent's input treats bytes that land together as one paste, and a Return inside a paste
+    /// becomes a line break in the draft. Only a Return that arrives on its own, once the paste has
+    /// settled, submits the line.
+    static let replyReturnDelay: Duration = .milliseconds(200)
+    static let returnKeystroke = Array("\r".utf8)
 
     private let connection: NWConnection
     private let hostName: String
@@ -269,9 +276,16 @@ final class RemoteHostConnection {
             }
             // The Return is added here, not sent by the device. A device says words; it does not
             // decide when a line is submitted, and it cannot smuggle control bytes through this.
-            let bytes = Array(request.text.utf8) + Array("\r".utf8)
-            if dataSource?.sendInput(tabID: request.tabID, bytes: bytes[...]) != true {
+            guard let dataSource,
+                  dataSource.sendInput(tabID: request.tabID, bytes: Array(request.text.utf8)[...]) else {
                 sendControl(.error(RemoteError(code: "agentReply", message: "has no terminal for that tab")))
+                return
+            }
+            // The data source is held, not the connection: a device that drops the instant it
+            // sends must still get its words submitted rather than left sitting in the draft.
+            Task { @MainActor in
+                try? await Task.sleep(for: Self.replyReturnDelay)
+                _ = dataSource.sendInput(tabID: request.tabID, bytes: Self.returnKeystroke[...])
             }
 
         case .agentAnswer(let request):
