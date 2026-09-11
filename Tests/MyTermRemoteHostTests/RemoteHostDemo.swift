@@ -39,6 +39,74 @@ private final class DemoDataSource: RemoteHostDataSource {
         }
     }
 
+    /// Shell functions that stand in for the agent's own screen-only commands.
+    ///
+    /// `/usage`, `/status` and `/help` each draw a dialog on the screen, write nothing anywhere,
+    /// and close on one key, as the CLI's do. The dialogs are cut down from the real ones; the
+    /// shape is what matters: a rule, a tab strip, an indented body and "Esc to cancel". Sourced
+    /// into the agent tab's shell, so a line the device types runs them as the CLI would.
+    static let agentDialogScript = #"""
+    _myterm_demo_dialog() {
+        clear
+        printf '%s\n' "$@"
+        _myterm_demo_saved=$(stty -g)
+        stty -icanon -echo min 1 time 0
+        dd bs=1 count=1 >/dev/null 2>&1
+        stty "$_myterm_demo_saved"
+        clear
+    }
+    function /usage {
+        _myterm_demo_dialog \
+            '▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔' \
+            '   Settings  Status   Config   Usage   Stats' \
+            '' \
+            '   Session' \
+            '' \
+            '   Total cost:            $0.0000' \
+            '   Total duration (API):  0s' \
+            '   Total duration (wall): 11s' \
+            '' \
+            '   Current session' \
+            '   ██████████▌                                        21% used' \
+            '' \
+            '   Esc to cancel'
+    }
+    function /status {
+        _myterm_demo_dialog \
+            '▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔' \
+            '   Settings  Status   Config   Usage   Stats' \
+            '' \
+            '   Version:                 2.1.258' \
+            '   Session name:            /rename to add a name' \
+            '   Session kind:            interactive' \
+            '   cwd:                     ~/projects/myterm' \
+            '   Login method:            Claude Max account' \
+            '' \
+            '   Model:                   opus[1m] (claude-opus-5[1m])' \
+            '' \
+            '   Esc to cancel'
+    }
+    function /help {
+        _myterm_demo_dialog \
+            '▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔' \
+            '   Help  General   Commands   Custom commands' \
+            '' \
+            '   Shortcuts' \
+            '   ! for shell mode          double tap esc to clear input' \
+            '   / for commands            shift + tab to auto-accept edits' \
+            '' \
+            '   Esc to cancel'
+    }
+    """#
+
+    /// Writes the dialog functions where the agent tab's shell can source them.
+    static func writeAgentDialogScript() throws -> String {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("myterm-remote-demo-agent.sh").path
+        try agentDialogScript.write(toFile: path, atomically: true, encoding: .utf8)
+        return path
+    }
+
     /// The backlog a device sees on connect: the two demo tabs whose cook asks for the user.
     ///
     /// Newest first, as the Mac's bell lists it. `fileNotification` and `readAll` are what the UI
@@ -234,7 +302,8 @@ final class RemoteHostDemo: XCTestCase {
         let source = DemoDataSource()
         defer { source.terminateAll() }
         try source.addSession(title: "build", command: "printf 'A%sB\\n' DEMOREADY; ls -la\n")
-        try source.addSession(title: "agent", command: "printf 'waiting for you\\n'\n")
+        let dialogs = try DemoDataSource.writeAgentDialogScript()
+        try source.addSession(title: "agent", command: "source '\(dialogs)'; printf 'waiting for you\\n'\n")
         try source.addSession(title: "deploy", command: "printf 'done\\n'\n")
 
         let token = "demotoken"

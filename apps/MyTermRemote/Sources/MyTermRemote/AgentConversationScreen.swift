@@ -479,6 +479,8 @@ private struct AgentLocalCommandView: View {
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
+        // A screen scrolls sideways, and text that scrolls is left out of the combined label.
+        .accessibilityValue(command.isScreen ? command.output : "")
         .accessibilityIdentifier("agent.localCommand")
     }
 
@@ -496,7 +498,6 @@ private struct AgentLocalCommandView: View {
                     .padding(10)
             }
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-            .accessibilityIdentifier("agent.localCommand.screen")
         } else if command.output.contains("\n") {
             AgentMarkdownView(text: command.output)
                 .font(.caption)

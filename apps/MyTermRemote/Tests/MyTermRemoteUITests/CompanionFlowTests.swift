@@ -527,7 +527,7 @@ final class AgentCommandTests: XCTestCase {
     }
 
     @MainActor
-    func testTheCommandSheetRunsACommandAndSaysWhereItsAnswerWent() throws {
+    func testTheCommandSheetRunsACommandAndShowsTheDialogItDrewOnTheMac() throws {
         let app = try launchOnAgentTab()
 
         app.buttons["agent.openCommands"].tap()
@@ -538,14 +538,23 @@ final class AgentCommandTests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any)["agent.command./resume"].firstMatch.exists, "a picker command is not offered")
         snap("73-command-sheet")
 
-        // `/status` draws only on the Mac's screen, verified against the CLI, so the phone says so.
+        // `/status` draws only on the Mac's screen, verified against the CLI. The demo host's
+        // agent tab draws the same kind of dialog, and the Mac reads it back for the phone.
         app.descendants(matching: .any)["agent.command./status"].firstMatch.tap()
-        XCTAssertTrue(app.otherElements["agent.screenNotice"].waitForExistence(timeout: 5), "a screen-only command says where its answer is")
+        XCTAssertTrue(app.otherElements["agent.screen"].waitForExistence(timeout: 15), "the dialog the Mac read is offered for dismissal")
         XCTAssertFalse(app.staticTexts["refusal.message"].exists, "the command should be accepted")
-        snap("74-shown-on-mac")
-        app.buttons["agent.screenNotice.terminal"].tap()
-        XCTAssertTrue(app.buttons["agent.toggleTerminal"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.buttons["agent.toggleTerminal"].label, "Conversation", "the bar's button leads to the terminal")
+        XCTAssertFalse(app.otherElements["agent.screenNotice"].exists, "the notice that could only name the Mac has given way")
+        snap("74-screen-dialog")
+        let row = app.descendants(matching: .any).matching(identifier: "agent.localCommand").allElementsBoundByIndex.last
+        XCTAssertEqual(row?.label.contains("Ran /status"), true, "the dialog is the command's row: \(row?.label ?? "")")
+        XCTAssertEqual((row?.value as? String)?.contains("Esc to cancel"), true, "the rows the Mac read are the row's output")
+        XCTAssertTrue(app.buttons["agent.screen.terminal"].exists, "the terminal stays one tap away")
+
+        // Dismissing sends the Mac its Escape, and the bar goes once the dialog has.
+        app.buttons["agent.screen.dismiss"].tap()
+        XCTAssertTrue(app.otherElements["agent.screen"].waitForNonExistence(timeout: 15), "the dialog closed on the Mac and the offer to dismiss it went")
+        XCTAssertTrue(app.textFields["agent.reply"].exists, "the reply field is back")
+        snap("74-screen-dismissed")
     }
 
     @MainActor
