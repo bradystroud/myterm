@@ -426,8 +426,11 @@ final class RemoteProtocolTests: XCTestCase {
     /// The dismissal names a tab and nothing else: no keystroke and no session travels from a device.
     func testADismissalCarriesOnlyTheTab() throws {
         let frame = try RemoteControlCodec.encode(.dismissAgentScreen(RemoteDismissAgentScreen(tabID: "tab-1")))
-        let json = String(decoding: frame.payload, as: UTF8.self)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(frame.payload)) as? [String: Any])
+        let body = try XCTUnwrap(json["dismissAgentScreen"] as? [String: Any])
 
-        XCTAssertEqual(json, #"{"dismissAgentScreen":{"tabID":"tab-1"},"type":"dismissAgentScreen"}"#)
+        XCTAssertEqual(json["type"] as? String, "dismissAgentScreen")
+        XCTAssertEqual(body.keys.sorted(), ["tabID"])
+        XCTAssertEqual(body["tabID"] as? String, "tab-1")
     }
 }
