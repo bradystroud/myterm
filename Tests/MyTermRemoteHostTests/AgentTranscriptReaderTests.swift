@@ -346,7 +346,7 @@ final class AgentTranscriptReaderTests: XCTestCase {
         ]
         let entries = reader.entries(from: lines)
         XCTAssertEqual(entries.count, 1)
-        XCTAssertEqual(entries.first?.role, .user)
+        XCTAssertEqual(entries.first?.role, .system)
         XCTAssertNotNil(entries.first?.timestamp)
         XCTAssertEqual(entries.first?.blocks, [.localCommand(RemoteAgentLocalCommand(
             name: "/model",
@@ -389,6 +389,89 @@ final class AgentTranscriptReaderTests: XCTestCase {
             #"{"type":"user","uuid":"c2","message":{"role":"user","content":"<local-command-stdout>Resume cancelled</local-command-stdout>"}}"#,
         ]
         XCTAssertEqual(reader.entries(from: lines).map(\.id), ["u1", "c2"])
+    }
+
+    func testACommandIsNeitherSideOfTheTalk() {
+        let line = #"{"type":"user","uuid":"c1","message":{"role":"user","content":"<command-name>/clear</command-name>\n<command-args></command-args>"}}"#
+        XCTAssertEqual(reader.entry(from: line)?.role, .system)
+    }
+
+    func testTheReadableCopyOfACommandsOutputReplacesTheOneDrawnForTheTerminal() {
+        // `/context`, as the CLI writes it: a grid of glyphs styled for its own screen, then the
+        // same figures as markdown filed in the person's name for the agent to read.
+        let lines = [
+            #"{"type":"system","subtype":"local_command","uuid":"c1","content":"<command-name>/context</command-name>\n<command-message>context</command-message>\n<command-args></command-args>"}"#,
+            #"{"type":"system","subtype":"local_command","uuid":"c2","content":"<local-command-stdout> \u001b[1mContext Usage\u001b[22m \u001b[38;2;136;136;136m⛀ ⛁ ⛶</local-command-stdout>"}"#,
+            ###"{"type":"user","uuid":"m1","isMeta":true,"message":{"role":"user","content":"## Context Usage\n\n**Model:** claude-opus-5[1m]\n**Tokens:** 33.9k / 1m (3%)"}}"###,
+        ]
+        let entries = reader.entries(from: lines)
+        XCTAssertEqual(entries.map(\.id), ["c1"])
+        XCTAssertEqual(entries.first?.blocks, [.localCommand(RemoteAgentLocalCommand(
+            name: "/context",
+            output: "## Context Usage\n\n**Model:** claude-opus-5[1m]\n**Tokens:** 33.9k / 1m (3%)"
+        ))])
+    }
+
+    func testAReminderTheAgentLeavesItselfIsNotShown() {
+        // Written after `/rename`, in the person's name, for the agent.
+        let line = #"{"type":"user","uuid":"m1","isMeta":true,"message":{"role":"user","content":"<system-reminder>\nThe user named this session \"probe\".\n</system-reminder>"}}"#
+        XCTAssertNil(reader.entry(from: line))
+    }
+
+    // MARK: - Compaction
+
+    func testAnAutomaticCompactionIsANoteAndItsSummaryIsNotAMessage() {
+        // The shapes a real compaction writes: a boundary record, then the summary filed in the
+        // person's name with `isCompactSummary`.
+        let lines = [
+            #"{"type":"assistant","uuid":"a1","message":{"model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"Before."}]}}"#,
+            #"{"type":"system","subtype":"compact_boundary","uuid":"b1","content":"Conversation compacted","level":"info","compactMetadata":{"trigger":"auto","preTokens":916116,"postTokens":77118}}"#,
+            #"{"type":"user","uuid":"s1","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation."}}"#,
+            #"{"type":"user","uuid":"u1","message":{"role":"user","content":"carry on"}}"#,
+        ]
+        let entries = reader.entries(from: lines)
+        XCTAssertEqual(entries.map(\.id), ["a1", "b1", "u1"])
+        XCTAssertEqual(entries[1].role, .system)
+        XCTAssertEqual(entries[1].blocks, [.note(RemoteAgentNote(text: "Conversation compacted"))])
+    }
+
+    func testAManualCompactionIsShownOnceByItsCommand() {
+        // `/compact`, as the CLI writes it: the boundary and summary first, then the command
+        // and what it printed. One row is enough.
+        let lines = [
+            #"{"type":"system","subtype":"compact_boundary","uuid":"b1","content":"Conversation compacted","level":"info","compactMetadata":{"trigger":"manual","preTokens":50000,"postTokens":8000}}"#,
+            #"{"type":"user","uuid":"s1","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"This session is being continued from a previous conversation."}}"#,
+            #"{"type":"user","uuid":"c0","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>Caveat: never mind</local-command-caveat>"}}"#,
+            #"{"type":"user","uuid":"c1","message":{"role":"user","content":"<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>"}}"#,
+            #"{"type":"user","uuid":"c2","message":{"role":"user","content":"<local-command-stdout>\u001b[2mCompacted (ctrl+o to see full summary)\u001b[22m</local-command-stdout>"}}"#,
+        ]
+        let entries = reader.entries(from: lines)
+        XCTAssertEqual(entries.map(\.id), ["c1"])
+        XCTAssertEqual(entries.first?.blocks, [.localCommand(RemoteAgentLocalCommand(
+            name: "/compact",
+            output: "Compacted (ctrl+o to see full summary)"
+        ))])
+    }
+
+    // MARK: - Notes from the agent's machinery
+
+    func testAWarningTheAgentRecordsIsANote() {
+        // Verbatim shapes: a lost connection, and a model swapped after a refusal.
+        let informational = #"{"type":"system","subtype":"informational","uuid":"n1","content":"Remote Control disconnected — run /login to restore Remote Control","level":"warning"}"#
+        XCTAssertEqual(reader.entry(from: informational)?.blocks, [.note(RemoteAgentNote(
+            text: "Remote Control disconnected — run /login to restore Remote Control", level: .warning
+        ))])
+        let fallback = #"{"type":"system","subtype":"model_refusal_fallback","uuid":"n2","content":"Opus 5's safeguards flagged this message. Switched to Opus 4.8.","level":"warning","originalModel":"claude-opus-5[1m]","fallbackModel":"claude-opus-4-8"}"#
+        XCTAssertEqual(reader.entry(from: fallback)?.blocks, [.note(RemoteAgentNote(
+            text: "Opus 5's safeguards flagged this message. Switched to Opus 4.8.", level: .warning
+        ))])
+    }
+
+    func testBookkeepingRecordsAreNotNotes() {
+        XCTAssertNil(reader.entry(from: #"{"type":"system","subtype":"turn_duration","uuid":"x1","durationMs":69851}"#))
+        XCTAssertNil(reader.entry(from: #"{"type":"system","subtype":"api_error","uuid":"x2","level":"error","retryAttempt":1}"#))
+        XCTAssertNil(reader.entry(from: #"{"type":"system","subtype":"stop_hook_summary","uuid":"x3","hookCount":5}"#))
+        XCTAssertNil(reader.entry(from: #"{"type":"system","subtype":"away_summary","uuid":"x4","content":"Deployed and verified."}"#))
     }
 
     // MARK: - The conversation's name

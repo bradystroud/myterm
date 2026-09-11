@@ -162,6 +162,43 @@ final class AgentTranscriptWatcherTests: XCTestCase {
         XCTAssertEqual(ids, ["a1"])
     }
 
+    /// `/clear` gives the tab a new session, verified against the CLI: the command itself is
+    /// recorded in the new session's file, and the old file never grows again.
+    func testANewSessionIsFollowedAsAFreshConversation() async throws {
+        try append(line("a1", text: "first") + "\n")
+        let newSession = "2bd52f6c-9f22-4a60-8afd-a53466ab5219"
+        var current = session
+        var conversations: [RemoteAgentConversation] = []
+        var updates: [RemoteAgentEntries] = []
+        let watcher = AgentTranscriptWatcher(
+            tabID: "tab-1",
+            agent: "claude",
+            sessionID: { current },
+            projectsDirectory: root,
+            onConversation: { conversations.append($0) },
+            onEntries: { updates.append($0) }
+        )
+        watcher.start()
+        defer { watcher.stop() }
+        await wait { !conversations.isEmpty }
+        XCTAssertEqual(conversations.last?.entries.map(\.id), ["a1"])
+
+        // The hook reports the new identifier, and the new file opens with the command that
+        // made it. The old file is left exactly as it was.
+        let clear = """
+        {"type":"user","uuid":"c1","message":{"role":"user","content":"<command-name>/clear</command-name>\\n\
+        <command-message>clear</command-message>\\n<command-args></command-args>"}}\n
+        """
+        try clear.write(to: project.appendingPathComponent("\(newSession).jsonl"), atomically: true, encoding: .utf8)
+        current = newSession
+
+        await wait { conversations.count > 1 }
+        XCTAssertEqual(conversations.count, 2, "a new session is a new backlog, not a batch of entries")
+        XCTAssertEqual(conversations.last?.entries.map(\.id), ["c1"])
+        XCTAssertEqual(conversations.last?.entries.first?.blocks, [.localCommand(RemoteAgentLocalCommand(name: "/clear"))])
+        XCTAssertTrue(updates.isEmpty)
+    }
+
     func testStoppingEndsTheFollowing() async throws {
         try append(line("a1", text: "first") + "\n")
         var updates: [RemoteAgentEntries] = []

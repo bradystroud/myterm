@@ -128,7 +128,9 @@ public struct AgentTranscriptReader {
     static func append(_ entry: RemoteAgentEntry, to entries: inout [RemoteAgentEntry]) {
         if case .localCommand(let output)? = entry.blocks.first, output.name.isEmpty,
            let last = entries.last, case .localCommand(var command)? = last.blocks.first,
-           !command.name.isEmpty, command.output.isEmpty {
+           !command.name.isEmpty {
+            // The first output fills an empty row. A readable copy filed after the one drawn for
+            // the terminal replaces it: `/context` writes its grid, then its markdown.
             command.output = output.output
             command.isError = output.isError
             entries[entries.count - 1].blocks = [.localCommand(command)]
@@ -178,21 +180,38 @@ public struct AgentTranscriptReader {
         }
         let timestamp = timestamp(from: object["timestamp"])
 
-        // A command run in the agent's own interface. Newer agents file it as a system record and
-        // older ones as a user turn, both wrapped in the same markup.
-        if type == "system", object["subtype"] as? String == "local_command",
-           let content = object["content"] as? String {
-            guard let command = localCommand(from: content) else { return nil }
-            return RemoteAgentEntry(id: id, role: .user, timestamp: timestamp, blocks: [.localCommand(command)])
+        if type == "system" {
+            guard let block = systemBlock(from: object) else { return nil }
+            return RemoteAgentEntry(id: id, role: .system, timestamp: timestamp, blocks: [block])
         }
 
-        guard let role = RemoteAgentRole(rawValue: type),
+        guard let role = RemoteAgentRole(rawValue: type), role != .system,
               let message = object["message"] as? [String: Any] else {
             return nil
         }
-        if role == .user, let content = message["content"] as? String, LocalCommandMarkup.wraps(content) {
-            guard let command = localCommand(from: content) else { return nil }
-            return RemoteAgentEntry(id: id, role: .user, timestamp: timestamp, blocks: [.localCommand(command)])
+        if role == .user, let content = message["content"] as? String {
+            // A command run in the agent's own interface. Older agents file it as a user turn
+            // wrapped in markup; newer ones as a system record carrying the same markup.
+            if LocalCommandMarkup.wraps(content) {
+                guard let command = localCommand(from: content) else { return nil }
+                return RemoteAgentEntry(id: id, role: .system, timestamp: timestamp, blocks: [.localCommand(command)])
+            }
+            // The summary written in the person's name after a compaction, and reminders the
+            // agent leaves for itself. Neither is something the person said.
+            if object["isCompactSummary"] as? Bool == true
+                || content.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<system-reminder>") {
+                return nil
+            }
+            // The readable copy of a command's output, filed in the person's name for the agent
+            // to read. It belongs to the command, and `append` gives it to it.
+            if object["isMeta"] as? Bool == true {
+                let text = presentable(content)
+                guard !text.isEmpty else { return nil }
+                return RemoteAgentEntry(
+                    id: id, role: .system, timestamp: timestamp,
+                    blocks: [.localCommand(RemoteAgentLocalCommand(name: "", output: text))]
+                )
+            }
         }
 
         let blocks = self.blocks(from: message["content"], pending: &pending)
@@ -214,6 +233,33 @@ public struct AgentTranscriptReader {
             return nil
         }
         return model
+    }
+
+    // MARK: - System records
+
+    /// What a system record is worth telling a person, if anything.
+    ///
+    /// Most are bookkeeping: hook summaries, turn timings, API retries. The ones kept are the ones
+    /// that change what the conversation means: a command the person ran, a compaction, a model
+    /// swapped for another, a connection lost.
+    private static func systemBlock(from object: [String: Any]) -> RemoteAgentBlock? {
+        let content = nonEmpty(object["content"] as? String)
+        switch object["subtype"] as? String {
+        case "local_command":
+            guard let content, let command = localCommand(from: content) else { return nil }
+            return .localCommand(command)
+        case "compact_boundary":
+            // A manual compaction is already shown by the `/compact` command that follows it.
+            let metadata = object["compactMetadata"] as? [String: Any]
+            guard metadata?["trigger"] as? String != "manual" else { return nil }
+            return .note(RemoteAgentNote(text: content ?? "Conversation compacted"))
+        case "informational", "model_refusal_fallback":
+            guard let content else { return nil }
+            let level: RemoteAgentNote.Level = object["level"] as? String == "warning" ? .warning : .info
+            return .note(RemoteAgentNote(text: presentable(content), level: level))
+        default:
+            return nil
+        }
     }
 
     // MARK: - Local commands
@@ -481,6 +527,8 @@ public struct AgentTranscriptReader {
                 return total + 16
             case .localCommand(let command):
                 return total + command.name.count + command.args.count + command.output.count
+            case .note(let note):
+                return total + note.text.count
             }
         }
     }
