@@ -346,7 +346,7 @@ final class InteractionBehaviorTests: XCTestCase {
         XCTAssertFalse(SidebarDropCalculations.containerAcceptsWorkspace(source: unfiled, folderID: nil))
     }
 
-    func testWorkspaceRowFeedbackShowsTheEdgeThePointerSelects() {
+    func testWorkspaceRowFeedbackPreviewsTheSlotThePointerSelects() {
         let folderA = WorkspaceFolderID()
         let folderB = WorkspaceFolderID()
         let source = Workspace(title: "Source", folderID: folderA, isPinned: true)
@@ -354,6 +354,8 @@ final class InteractionBehaviorTests: XCTestCase {
         let otherFolder = Workspace(title: "Other", folderID: folderB, isPinned: true)
         let workspaces = [source, target, otherFolder]
 
+        // The preview replaces the insertion line: the edge is no longer reported, because the
+        // slot it stood for is now shown by the rows themselves.
         XCTAssertEqual(
             SidebarDropCalculations.workspaceRowFeedback(
                 .workspace(source.id),
@@ -362,9 +364,9 @@ final class InteractionBehaviorTests: XCTestCase {
                 renderedHeight: 40,
                 in: workspaces
             ),
-            .insertion(.bottom)
+            .preview(.workspace(source.id, folderID: folderA, isPinned: true, before: nil))
         )
-        // A source from another folder now reads as an insertion rather than a refused drop.
+        // A source from another folder previews as refiled into the target's folder and band.
         XCTAssertEqual(
             SidebarDropCalculations.workspaceRowFeedback(
                 .workspace(otherFolder.id),
@@ -373,9 +375,10 @@ final class InteractionBehaviorTests: XCTestCase {
                 renderedHeight: 40,
                 in: workspaces
             ),
-            .insertion(.top)
+            .preview(.workspace(otherFolder.id, folderID: folderA, isPinned: true, before: target.id))
         )
-        // The row a drag started from shows nothing, and a folder payload never lands on a row.
+        // The row a drag started from is the source's own slot, so it keeps whatever preview is
+        // open instead of closing it; a folder payload never lands on a row.
         XCTAssertEqual(
             SidebarDropCalculations.workspaceRowFeedback(
                 .workspace(source.id),
@@ -384,7 +387,7 @@ final class InteractionBehaviorTests: XCTestCase {
                 renderedHeight: 40,
                 in: workspaces
             ),
-            SidebarDropFeedback.none
+            .keep
         )
         XCTAssertEqual(
             SidebarDropCalculations.workspaceRowFeedback(
@@ -439,7 +442,7 @@ final class InteractionBehaviorTests: XCTestCase {
             ),
             SidebarDropFeedback.none
         )
-        // A folder lands beside the row, so it shows the edge the pointer selects.
+        // A folder lands beside the row, so the folders preview the slot the pointer selects.
         XCTAssertEqual(
             SidebarDropCalculations.folderRowFeedback(
                 .folder(folderB.id),
@@ -450,8 +453,9 @@ final class InteractionBehaviorTests: XCTestCase {
                 workspaces: [workspace],
                 folders: folders
             ),
-            .insertion(.top)
+            .preview(.folder(folderB.id, before: folderA.id))
         )
+        // The folder a drag started from is its own slot, so it keeps the open preview.
         XCTAssertEqual(
             SidebarDropCalculations.folderRowFeedback(
                 .folder(folderA.id),
@@ -462,7 +466,7 @@ final class InteractionBehaviorTests: XCTestCase {
                 workspaces: [workspace],
                 folders: folders
             ),
-            SidebarDropFeedback.none
+            .keep
         )
         XCTAssertEqual(
             SidebarDropCalculations.folderRowFeedback(
@@ -704,6 +708,339 @@ final class InteractionBehaviorTests: XCTestCase {
             ),
             .insert(before: nil, edge: .bottom)
         )
+    }
+
+    func testPreviewedWorkspacesMatchWhatTheStoreCommits() throws {
+        let store = try WorkspaceStore(persistenceURL: temporaryStoreURL())
+        let folderID = try store.createFolder(title: "Folder")
+        let pinnedID = try store.createWorkspace(title: "Pinned", folderID: folderID)
+        try store.setWorkspacePinned(pinnedID, isPinned: true)
+        let firstID = try store.createWorkspace(title: "First", folderID: folderID)
+        let secondID = try store.createWorkspace(title: "Second", folderID: folderID)
+        let thirdID = try store.createWorkspace(title: "Third", folderID: folderID)
+        let otherFolderID = try store.createFolder(title: "Other")
+        let elsewhereID = try store.createWorkspace(title: "Elsewhere", folderID: otherFolderID)
+        let original = store.workspaces
+
+        struct Move {
+            let sourceID: WorkspaceID
+            let folderID: WorkspaceFolderID?
+            let isPinned: Bool
+            let before: WorkspaceID?
+        }
+        let moves = [
+            Move(sourceID: firstID, folderID: folderID, isPinned: false, before: thirdID),
+            Move(sourceID: firstID, folderID: folderID, isPinned: false, before: nil),
+            Move(sourceID: thirdID, folderID: folderID, isPinned: false, before: firstID),
+            Move(sourceID: secondID, folderID: folderID, isPinned: false, before: nil),
+            // Crossing the pinned band, and crossing into another folder, both while reordering.
+            Move(sourceID: secondID, folderID: folderID, isPinned: true, before: pinnedID),
+            Move(sourceID: secondID, folderID: folderID, isPinned: true, before: nil),
+            Move(sourceID: pinnedID, folderID: folderID, isPinned: false, before: secondID),
+            Move(sourceID: elsewhereID, folderID: folderID, isPinned: false, before: secondID),
+            Move(sourceID: elsewhereID, folderID: folderID, isPinned: true, before: nil),
+            Move(sourceID: firstID, folderID: otherFolderID, isPinned: false, before: elsewhereID),
+            Move(sourceID: firstID, folderID: nil, isPinned: true, before: nil),
+        ]
+
+        for move in moves {
+            let previewed = SidebarDropCalculations.previewedWorkspaces(
+                original,
+                applying: .workspace(move.sourceID, folderID: move.folderID, isPinned: move.isPinned, before: move.before)
+            )
+            try store.moveWorkspace(move.sourceID, to: move.folderID, before: move.before, isPinned: move.isPinned)
+            XCTAssertEqual(previewed, store.workspaces, "\(move)")
+
+            try store.moveWorkspace(pinnedID, to: folderID, before: nil, isPinned: true)
+            for id in [firstID, secondID, thirdID] {
+                try store.moveWorkspace(id, to: folderID, before: nil, isPinned: false)
+            }
+            try store.moveWorkspace(elsewhereID, to: otherFolderID, before: nil, isPinned: false)
+            XCTAssertEqual(store.workspaces, original)
+        }
+    }
+
+    func testPreviewedWorkspacesLeaveTheOrderAloneWithoutAUsablePreview() {
+        let folderID = WorkspaceFolderID()
+        let pinned = Workspace(title: "Pinned", folderID: folderID, isPinned: true)
+        let first = Workspace(title: "First", folderID: folderID)
+        let second = Workspace(title: "Second", folderID: folderID)
+        let elsewhere = Workspace(title: "Elsewhere", folderID: nil)
+        let workspaces = [pinned, first, second, elsewhere]
+
+        XCTAssertEqual(
+            SidebarDropCalculations.previewedWorkspaces(workspaces, applying: nil),
+            workspaces
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.previewedWorkspaces(workspaces, applying: .folder(WorkspaceFolderID(), before: nil)),
+            workspaces
+        )
+        // A destination that does not hold `before` is the invariant the store refuses, so the
+        // preview leaves the rows alone rather than drawing an order the drop could never commit.
+        XCTAssertEqual(
+            SidebarDropCalculations.previewedWorkspaces(
+                workspaces,
+                applying: .workspace(first.id, folderID: folderID, isPinned: false, before: first.id)
+            ),
+            workspaces
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.previewedWorkspaces(
+                workspaces,
+                applying: .workspace(first.id, folderID: folderID, isPinned: false, before: pinned.id)
+            ),
+            workspaces
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.previewedWorkspaces(
+                workspaces,
+                applying: .workspace(first.id, folderID: folderID, isPinned: false, before: elsewhere.id)
+            ),
+            workspaces
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.previewedWorkspaces(
+                workspaces,
+                applying: .workspace(WorkspaceID(), folderID: folderID, isPinned: false, before: nil)
+            ),
+            workspaces
+        )
+    }
+
+    func testPreviewedFoldersMatchWhatTheStoreCommits() throws {
+        let store = try WorkspaceStore(persistenceURL: temporaryStoreURL())
+        let aID = try store.createFolder(title: "A")
+        let bID = try store.createFolder(title: "B")
+        let cID = try store.createFolder(title: "C")
+        let original = store.folders
+
+        for (sourceID, before) in [(aID, cID), (aID, nil), (cID, aID), (bID, nil)] {
+            let previewed = SidebarDropCalculations.previewedFolders(
+                original,
+                applying: .folder(sourceID, before: before)
+            )
+            try store.moveFolder(sourceID, before: before)
+            XCTAssertEqual(previewed.map(\.id), store.folders.map(\.id), "\(sourceID) before \(String(describing: before))")
+            for id in [aID, bID, cID] {
+                try store.moveFolder(id, before: nil)
+            }
+            XCTAssertEqual(store.folders.map(\.id), original.map(\.id))
+        }
+
+        XCTAssertEqual(SidebarDropCalculations.previewedFolders(original, applying: nil), original)
+        XCTAssertEqual(
+            SidebarDropCalculations.previewedFolders(original, applying: .workspace(WorkspaceID(), folderID: nil, isPinned: false, before: nil)),
+            original
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.previewedFolders(original, applying: .folder(aID, before: WorkspaceFolderID())),
+            original
+        )
+    }
+
+    func testWorkspaceRowFeedbackFollowsThePointerThroughThePreviewedOrder() {
+        let folderID = WorkspaceFolderID()
+        let a = Workspace(title: "A", folderID: folderID)
+        let b = Workspace(title: "B", folderID: folderID)
+        let c = Workspace(title: "C", folderID: folderID)
+        let workspaces = [a, b, c]
+
+        // Hovering the next sibling swaps past it, which the sidebar then shows as [B, A, C].
+        let swapped = SidebarDropCalculations.workspaceRowFeedback(
+            .workspace(a.id),
+            target: b,
+            locationY: 5,
+            renderedHeight: 30,
+            in: workspaces
+        )
+        XCTAssertEqual(swapped, .preview(.workspace(a.id, folderID: folderID, isPinned: false, before: c.id)))
+        guard case .preview(let preview) = swapped else { return XCTFail("expected a preview") }
+        let previewed = SidebarDropCalculations.previewedWorkspaces(workspaces, applying: preview)
+        XCTAssertEqual(previewed.map(\.id), [b.id, a.id, c.id])
+
+        // The source now sits under the stationary pointer; that must not close the gap.
+        XCTAssertEqual(
+            SidebarDropCalculations.workspaceRowFeedback(
+                .workspace(a.id),
+                target: a,
+                locationY: 5,
+                renderedHeight: 30,
+                in: previewed
+            ),
+            .keep
+        )
+        // The neighbour it displaced is judged in the previewed order, so hovering it swaps back.
+        XCTAssertEqual(
+            SidebarDropCalculations.workspaceRowFeedback(
+                .workspace(a.id),
+                target: b,
+                locationY: 25,
+                renderedHeight: 30,
+                in: previewed
+            ),
+            .preview(.workspace(a.id, folderID: folderID, isPinned: false, before: b.id))
+        )
+        // Past the last sibling lands at the end of the band.
+        XCTAssertEqual(
+            SidebarDropCalculations.workspaceRowFeedback(
+                .workspace(a.id),
+                target: c,
+                locationY: 25,
+                renderedHeight: 30,
+                in: previewed
+            ),
+            .preview(.workspace(a.id, folderID: folderID, isPinned: false, before: nil))
+        )
+    }
+
+    func testWorkspaceRowFeedbackPreviewsARefileAndRepinBesideTheTargetRow() {
+        let folderA = WorkspaceFolderID()
+        let folderB = WorkspaceFolderID()
+        let source = Workspace(title: "Source", folderID: folderA)
+        let pinned = Workspace(title: "Pinned", folderID: folderA, isPinned: true)
+        let other = Workspace(title: "Other", folderID: folderB)
+        let workspaces = [pinned, source, other]
+
+        // Into the pinned band above the pinned row, and the preview shows it pinned there.
+        let repinned = SidebarDropCalculations.workspaceRowFeedback(
+            .workspace(source.id),
+            target: pinned,
+            locationY: 5,
+            renderedHeight: 30,
+            in: workspaces
+        )
+        XCTAssertEqual(repinned, .preview(.workspace(source.id, folderID: folderA, isPinned: true, before: pinned.id)))
+        guard case .preview(let repinPreview) = repinned else { return XCTFail("expected a preview") }
+        let repinnedWorkspaces = SidebarDropCalculations.previewedWorkspaces(workspaces, applying: repinPreview)
+        XCTAssertEqual(repinnedWorkspaces.map(\.id), [source.id, pinned.id, other.id])
+        XCTAssertTrue(repinnedWorkspaces[0].isPinned)
+
+        // Into another folder below its only row, and the preview shows it filed there.
+        let refiled = SidebarDropCalculations.workspaceRowFeedback(
+            .workspace(source.id),
+            target: other,
+            locationY: 25,
+            renderedHeight: 30,
+            in: workspaces
+        )
+        XCTAssertEqual(refiled, .preview(.workspace(source.id, folderID: folderB, isPinned: false, before: nil)))
+        guard case .preview(let refilePreview) = refiled else { return XCTFail("expected a preview") }
+        let refiledWorkspaces = SidebarDropCalculations.previewedWorkspaces(workspaces, applying: refilePreview)
+        XCTAssertEqual(refiledWorkspaces.map(\.id), [pinned.id, other.id, source.id])
+        XCTAssertEqual(refiledWorkspaces[2].folderID, folderB)
+
+        // A folder payload never lands on a workspace row, and nothing in flight means nothing.
+        XCTAssertEqual(
+            SidebarDropCalculations.workspaceRowFeedback(
+                .folder(folderB),
+                target: source,
+                locationY: 5,
+                renderedHeight: 30,
+                in: workspaces
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.workspaceRowFeedback(
+                nil,
+                target: source,
+                locationY: 5,
+                renderedHeight: 30,
+                in: workspaces
+            ),
+            .none
+        )
+    }
+
+    func testFolderRowFeedbackHighlightsRefilesAndPreviewsFolderReorders() {
+        let a = WorkspaceFolder(id: WorkspaceFolderID(), title: "A")
+        let b = WorkspaceFolder(id: WorkspaceFolderID(), title: "B")
+        let c = WorkspaceFolder(id: WorkspaceFolderID(), title: "C")
+        let folders = [a, b, c]
+        let filedInA = Workspace(title: "Filed", folderID: a.id)
+
+        XCTAssertEqual(
+            SidebarDropCalculations.folderRowFeedback(
+                .workspace(filedInA.id),
+                folderID: b.id,
+                nextFolderID: c.id,
+                locationY: 5,
+                renderedHeight: 30,
+                workspaces: [filedInA],
+                folders: folders
+            ),
+            .highlight
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.folderRowFeedback(
+                .workspace(filedInA.id),
+                folderID: a.id,
+                nextFolderID: b.id,
+                locationY: 5,
+                renderedHeight: 30,
+                workspaces: [filedInA],
+                folders: folders
+            ),
+            .none
+        )
+
+        let swapped = SidebarDropCalculations.folderRowFeedback(
+            .folder(a.id),
+            folderID: b.id,
+            nextFolderID: c.id,
+            locationY: 5,
+            renderedHeight: 30,
+            workspaces: [filedInA],
+            folders: folders
+        )
+        XCTAssertEqual(swapped, .preview(.folder(a.id, before: c.id)))
+        guard case .preview(let preview) = swapped else { return XCTFail("expected a preview") }
+        let previewed = SidebarDropCalculations.previewedFolders(folders, applying: preview)
+        XCTAssertEqual(previewed.map(\.id), [b.id, a.id, c.id])
+
+        XCTAssertEqual(
+            SidebarDropCalculations.folderRowFeedback(
+                .folder(a.id),
+                folderID: a.id,
+                nextFolderID: c.id,
+                locationY: 5,
+                renderedHeight: 30,
+                workspaces: [filedInA],
+                folders: previewed
+            ),
+            .keep
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.folderRowFeedback(
+                .folder(a.id),
+                folderID: b.id,
+                nextFolderID: a.id,
+                locationY: 25,
+                renderedHeight: 30,
+                workspaces: [filedInA],
+                folders: previewed
+            ),
+            .preview(.folder(a.id, before: b.id))
+        )
+        XCTAssertEqual(
+            SidebarDropCalculations.folderRowFeedback(
+                nil,
+                folderID: b.id,
+                nextFolderID: c.id,
+                locationY: 5,
+                renderedHeight: 30,
+                workspaces: [filedInA],
+                folders: folders
+            ),
+            .none
+        )
+    }
+
+    private func temporaryStoreURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("sidebar-drop-preview-\(UUID().uuidString)")
+            .appendingPathExtension("json")
     }
 
     func testSidebarVisibleRowsKeepStableIDsAcrossFolderExpansionAndInsertions() {
