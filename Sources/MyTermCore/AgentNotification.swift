@@ -69,7 +69,7 @@ public enum AgentNotificationBuilder {
         )
     }
 
-    static func title(
+    public static func title(
         workspaceTitle: String,
         tabTitle: String,
         naming: AgentNotificationNaming
