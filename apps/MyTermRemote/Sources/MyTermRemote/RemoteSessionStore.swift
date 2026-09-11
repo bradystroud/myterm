@@ -1,6 +1,8 @@
 import Foundation
 import MyTermRemoteProtocol
 import Observation
+import SwiftUI
+import UIKit
 
 /// Owns the one `RemoteClient` for the app's lifetime and turns its delegate callbacks into state
 /// SwiftUI can observe, or into per-attachment closures that a terminal screen installs only while
@@ -30,6 +32,16 @@ final class RemoteSessionStore {
     private(set) var promptOptions: [RemoteAgentPromptOption] = []
     /// Set while an answer is in flight, so the buttons cannot be pressed twice.
     private(set) var isAnswering = false
+    /// The tab whose screen is showing. Reaching a tab takes its banner down, and an agent that
+    /// reports in this tab has nothing to announce.
+    @ObservationIgnored
+    var visibleTabID: String? {
+        didSet {
+            if let visibleTabID, visibleTabID != oldValue {
+                notifier?.withdraw(tabID: visibleTabID)
+            }
+        }
+    }
 
     /// Set by whichever `TerminalScreen` is currently attached; cleared when it detaches.
     @ObservationIgnored
@@ -45,9 +57,16 @@ final class RemoteSessionStore {
     private weak var attachmentOwner: AnyObject?
     @ObservationIgnored
     private var refusalTimer: Task<Void, Never>?
+    @ObservationIgnored
+    private let notifier: AgentNotifier?
+    /// Read at the moment a report arrives rather than mirrored from `scenePhase`: inactive covers
+    /// the lock screen and the app switcher, both of which are away from the tab.
+    @ObservationIgnored
+    var isApplicationActive: () -> Bool = { UIApplication.shared.applicationState == .active }
 
-    init(deviceName: String) {
+    init(deviceName: String, notifier: AgentNotifier? = nil) {
         client = RemoteClient(deviceName: deviceName)
+        self.notifier = notifier
         client.delegate = self
     }
 
@@ -147,6 +166,16 @@ extension RemoteSessionStore: RemoteClientDelegate {
     }
 
     func remoteClient(_ client: RemoteClient, didReceive activity: RemoteAgentActivity) {
+        // Decided against the tree as it stood, so the tab's previous state can tell a change from
+        // the Mac repeating one.
+        if let notifier {
+            let policy = RemoteAgentNotificationPolicy(
+                isEnabled: notifier.isEnabled,
+                isApplicationActive: isApplicationActive(),
+                visibleTabID: visibleTabID
+            )
+            notifier.apply(policy.action(for: activity, in: tree))
+        }
         tree = tree?.applyingAttention(from: activity)
     }
 
@@ -202,6 +231,21 @@ extension RemoteSessionStore: RemoteClientDelegate {
             guard !Task.isCancelled else { return }
             self?.refusal = nil
         }
+    }
+}
+
+extension View {
+    /// Tells the store which tab this screen shows, for as long as it is showing.
+    ///
+    /// The clear is guarded, because a replacing screen may appear before the one it replaces
+    /// disappears, and the departing screen must not erase its successor's answer.
+    func showsTab(_ tabID: String, in store: RemoteSessionStore) -> some View {
+        onAppear { store.visibleTabID = tabID }
+            .onDisappear {
+                if store.visibleTabID == tabID {
+                    store.visibleTabID = nil
+                }
+            }
     }
 }
 

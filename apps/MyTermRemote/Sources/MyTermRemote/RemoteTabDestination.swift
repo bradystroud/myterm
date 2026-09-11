@@ -15,18 +15,21 @@ struct RemoteTabDestination: View {
 
     var body: some View {
         if let tab {
-            switch tab.kind {
-            case .terminal:
-                // An agent's own conversation reads on a phone; its terminal grid does not. The raw
-                // terminal stays one tap away inside the conversation screen.
-                if tab.hasAgentConversation {
-                    AgentConversationScreen(tab: tab, store: store)
-                } else {
-                    TerminalScreen(tab: tab, store: store)
+            Group {
+                switch tab.kind {
+                case .terminal:
+                    // An agent's own conversation reads on a phone; its terminal grid does not. The
+                    // raw terminal stays one tap away inside the conversation screen.
+                    if tab.hasAgentConversation {
+                        AgentConversationScreen(tab: tab, store: store)
+                    } else {
+                        TerminalScreen(tab: tab, store: store)
+                    }
+                case .browser:
+                    BrowserTabScreen(tab: tab)
                 }
-            case .browser:
-                BrowserTabScreen(tab: tab)
             }
+            .showsTab(tab.id, in: store)
         } else {
             // The tab left the tree while it was open, which is what closing it from here does, or
             // it was opened from a Latest entry that outlived it. Saying so beats a blank screen;

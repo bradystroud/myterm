@@ -512,11 +512,12 @@ Ship it beside the relay, not instead of it.
 The attention dot is the reason to carry this app. Its delivery has a hard platform limit that the plan
 must state rather than discover.
 
-- **Foreground, connected.** The `agentActivity` message drives the same dot the Mac shows, plus an app
-  badge. This is free and works from the first milestone.
-- **Recently backgrounded.** iOS keeps the socket for a short period, roughly 30 seconds. During it, the
-  app raises a local notification when a message arrives. This is a useful window, and it is not a
-  general solution.
+- **Foreground, connected.** The `agentActivity` message drives the same dot the Mac shows. A tab
+  that is not on screen also gets a local banner, so a person reading one conversation hears about
+  another. Built; see `REMOTE_COMPANION_NOTIFICATIONS.md`.
+- **Recently backgrounded.** The app holds a background task so iOS keeps the process, and the
+  socket, for roughly 30 seconds after it leaves the screen. During it, the same local banner is
+  raised when a message arrives. This is a useful window, and it is not a general solution.
 - **Closed, or backgrounded longer.** Only Apple Push Notification service wakes an app, and APNs needs a
   provider that holds a signing key.
 
