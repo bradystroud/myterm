@@ -141,6 +141,9 @@ final class WorkspaceStoreCompatibilityTests: XCTestCase {
         let store = try WorkspaceStore(persistenceURL: stateURL)
         let session = try XCTUnwrap(store.selectedWorkspace.orderedGroups.first?.tabs.first?.terminalSession)
         XCTAssertNil(session.agentSession)
+        XCTAssertEqual(store.loadReport.structuralRepairCount, 0, "a newer build's handle is not a broken file")
+        XCTAssertEqual(store.loadReport.backupURLs, [])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.recoveryBackupURL.path))
     }
 
     func testAnUnknownTabKindFromANewerBuildIsDroppedAndBackedUp() throws {

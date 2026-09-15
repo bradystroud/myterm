@@ -2081,16 +2081,6 @@ final class AppModel {
             )
         }
         let resumeCommand = keepsSavedDirectory ? agentResumeCommand(for: session, settings: settings) : nil
-        // A pane that comes back without its resume command comes back to a prompt, and a pane at
-        // its prompt has left its conversation.
-        if initialCommand == nil, resumeCommand == nil, session.agentSession != nil {
-            try store.updateTerminalAgentSession(
-                workspaceID: workspaceID,
-                tabGroupID: tabGroupID,
-                tabID: tabID,
-                agentSession: nil
-            )
-        }
         let process = try terminalEngine.makeSession(
             configuration: TerminalSessionConfiguration(
                 shell: shellURL(for: settings.shell),
@@ -2138,6 +2128,22 @@ final class AppModel {
         } catch {
             terminalSessions.removeValue(forKey: session.id)
             throw error
+        }
+        // A pane that comes back without its resume command comes back to a prompt, and a pane at
+        // its prompt has left its conversation. Cleared only once the pane is running: a pane that
+        // failed to start has no prompt either, and keeps its conversation for the next attempt.
+        if initialCommand == nil, resumeCommand == nil, session.agentSession != nil {
+            do {
+                try store.updateTerminalAgentSession(
+                    workspaceID: workspaceID,
+                    tabGroupID: tabGroupID,
+                    tabID: tabID,
+                    agentSession: nil
+                )
+            } catch {
+                removeTerminalRuntime(session.id)
+                throw error
+            }
         }
     }
 
